@@ -2,7 +2,13 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="여행 공동경비 정산", layout="wide")
+# ------------------------
+# 기본 설정
+# ------------------------
+st.set_page_config(
+    page_title="여행 공동경비 정산",
+    layout="wide"
+)
 
 st.title("✈️ 여행 공동경비 정산 (Streamlit)")
 
@@ -10,26 +16,38 @@ st.title("✈️ 여행 공동경비 정산 (Streamlit)")
 # 참여자 입력
 # ------------------------
 st.header("👥 참여자")
-participants = st.text_input(
+participants_input = st.text_input(
     "참여자 이름 (쉼표로 구분, 최대 8명)",
     "A,B,C"
-).split(",")
+)
 
-participants = [p.strip() for p in participants if p.strip()]
+participants = [p.strip() for p in participants_input.split(",") if p.strip()]
+
+if len(participants) == 0:
+    st.warning("참여자를 1명 이상 입력하세요.")
+    st.stop()
+
+if len(participants) > 8:
+    st.error("참여자는 최대 8명까지 가능합니다.")
+    st.stop()
 
 # ------------------------
 # 환율 입력
 # ------------------------
 st.header("💱 환율")
 rates_input = st.text_input(
-    "통화:환율 형식 (예: KRW:1,USD:1350,JPY:9.1)",
+    "통화:환율 형식 (예: KRW:1, USD:1350, JPY:9.1)",
     "KRW:1,USD:1350"
 )
 
 exchange_rates = {}
-for r in rates_input.split(","):
-    k, v = r.split(":")
-    exchange_rates[k.strip()] = float(v)
+try:
+    for r in rates_input.split(","):
+        k, v = r.split(":")
+        exchange_rates[k.strip()] = float(v)
+except Exception:
+    st.error("환율 입력 형식이 잘못되었습니다.")
+    st.stop()
 
 # ------------------------
 # 지출 입력
@@ -38,28 +56,56 @@ st.header("💳 지출 내역")
 
 st.markdown(
 """
-형식:  
-`날짜 | 항목 | 결제자 | 통화 | 금액 | 참여자(|로 구분) | 메모`
+**입력 형식 ( | 로 구분)**  
+`날짜 | 항목 | 결제자 | 통화 | 금액 | 참여자(|로 구분) | 메모(선택)`
 """
 )
 
 raw_expenses = st.text_area(
     "지출 입력",
     value="2026-03-01 | 식당 | A | USD | 120 | A|B | 저녁식사",
-    height=150
+    height=160
 )
 
 expenses = []
+
 if raw_expenses:
-    for line in raw_expenses.split("\n"):
-        date, cat, payer, cur, amt, ps, memo = [x.strip() for x in line.split("|")]
+    for idx, line in enumerate(raw_expenses.split("\n"), start=1):
+        if not line.strip():
+            continue  # 빈 줄 무시
+
+        parts = [x.strip() for x in line.split("|")]
+
+        if len(parts) < 6:
+            st.error(f"{idx}번째 줄 형식 오류 (최소 6개 필요)\n\n{line}")
+            st.stop()
+
+        # memo가 없을 수 있으므로 보정
+        while len(parts) < 7:
+            parts.append("")
+
+        date, cat, payer, cur, amt, ps, memo = parts
+
+        if payer not in participants:
+            st.error(f"{idx}번째 줄: 결제자 '{payer}'가 참여자 목록에 없습니다.")
+            st.stop()
+
+        if cur not in exchange_rates:
+            st.error(f"{idx}번째 줄: 통화 '{cur}' 환율이 없습니다.")
+            st.stop()
+
+        expense_participants = [p.strip() for p in ps.split("|") if p.strip()]
+        if len(expense_participants) == 0:
+            st.error(f"{idx}번째 줄: 참여자가 비어 있습니다.")
+            st.stop()
+
         expenses.append({
             "date": date,
             "category": cat,
             "payer": payer,
             "currency": cur,
             "amount": float(amt),
-            "participants": ps.split("|"),
+            "participants": expense_participants,
             "memo": memo
         })
 
@@ -69,7 +115,6 @@ if raw_expenses:
 if st.button("🧮 정산 계산"):
     paid = {p: 0 for p in participants}
     owed = {p: 0 for p in participants}
-
     expense_rows = []
 
     for e in expenses:
@@ -91,24 +136,25 @@ if st.button("🧮 정산 계산"):
             "참여자": ", ".join(e["participants"])
         })
 
-    summary = []
+    summary_rows = []
     for p in participants:
-        summary.append({
+        summary_rows.append({
             "이름": p,
             "낸 돈": round(paid[p]),
             "부담금": round(owed[p]),
             "차액": round(paid[p] - owed[p])
         })
 
-    summary_df = pd.DataFrame(summary)
+    summary_df = pd.DataFrame(summary_rows)
 
     st.subheader("📊 정산 요약")
-    st.dataframe(summary_df)
+    st.dataframe(summary_df, use_container_width=True)
 
     # ------------------------
     # 송금 계산
     # ------------------------
     transfers = []
+
     givers = [(p, -(paid[p] - owed[p])) for p in participants if paid[p] - owed[p] < 0]
     takers = [(p, paid[p] - owed[p]) for p in participants if paid[p] - owed[p] > 0]
 
@@ -118,6 +164,7 @@ if st.button("🧮 정산 계산"):
         t_name, t_amt = takers[ti]
 
         amt = min(g_amt, t_amt)
+
         transfers.append({
             "보내는 사람": g_name,
             "받는 사람": t_name,
@@ -133,7 +180,10 @@ if st.button("🧮 정산 계산"):
             ti += 1
 
     st.subheader("💸 송금 안내")
-    st.dataframe(pd.DataFrame(transfers))
+    if transfers:
+        st.dataframe(pd.DataFrame(transfers), use_container_width=True)
+    else:
+        st.info("송금할 내역이 없습니다.")
 
     # ------------------------
     # 엑셀 다운로드
@@ -147,5 +197,6 @@ if st.button("🧮 정산 계산"):
     st.download_button(
         "⬇️ 엑셀 다운로드",
         data=output.getvalue(),
-        file_name="여행_공동경비_정산.xlsx"
+        file_name="여행_공동경비_정산.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
