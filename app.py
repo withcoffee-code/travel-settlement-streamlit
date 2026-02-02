@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from datetime import date
 
 # ========================
 # 기본 설정
@@ -52,86 +53,89 @@ except Exception:
     st.stop()
 
 # ========================
-# 지출 입력
+# 지출 입력 (폼 UI)
 # ========================
-st.header("💳 지출 내역")
+st.header("💳 지출 내역 입력")
 
-st.markdown(
-"""
-**입력 형식 (`|` 로 구분)**  
-`날짜 | 항목 | 결제자 | 통화 | 금액 | 참여자(|로 구분) | 메모(선택, | 포함 가능)`
-"""
-)
+if "expenses" not in st.session_state:
+    st.session_state.expenses = []
 
-raw_expenses = st.text_area(
-    "지출 입력",
-    value="2026-03-01 | 식당 | A | USD | 120 | A|B | 저녁 | 와인 포함",
-    height=180
-)
+with st.form("expense_form", clear_on_submit=True):
+    col1, col2, col3 = st.columns(3)
+    exp_date = col1.date_input("날짜", value=date.today())
+    category = col2.text_input("항목 (예: 숙소, 식당)")
+    payer = col3.selectbox("결제자", participants)
 
-expenses = []
+    col4, col5, col6 = st.columns(3)
+    currency = col4.selectbox("통화", list(exchange_rates.keys()))
+    amount = col5.number_input("금액", min_value=0.0, step=1.0)
+    memo = col6.text_input("메모 (선택)")
 
-if raw_expenses:
-    for idx, line in enumerate(raw_expenses.split("\n"), start=1):
-        if not line.strip():
-            continue  # 빈 줄 무시
+    st.markdown("**참여자 선택**")
+    participant_checks = {
+        p: st.checkbox(p, value=True)
+        for p in participants
+    }
 
-        parts = [x.strip() for x in line.split("|")]
+    submitted = st.form_submit_button("➕ 지출 추가")
 
-        if len(parts) < 6:
-            st.error(f"{idx}번째 줄 형식 오류 (최소 6개 필요)\n\n{line}")
-            st.stop()
+    if submitted:
+        selected_participants = [p for p, v in participant_checks.items() if v]
 
-        # 앞 6개는 고정, 나머지는 memo로 합침
-        date = parts[0]
-        category = parts[1]
-        payer = parts[2]
-        currency = parts[3]
-        amount = parts[4]
-        participant_str = parts[5]
-        memo = "|".join(parts[6:]).strip() if len(parts) > 6 else ""
+        if not category:
+            st.warning("항목을 입력하세요.")
+        elif not selected_participants:
+            st.warning("참여자를 최소 1명 선택하세요.")
+        else:
+            st.session_state.expenses.append({
+                "date": exp_date.strftime("%Y-%m-%d"),
+                "category": category,
+                "payer": payer,
+                "currency": currency,
+                "amount": amount,
+                "participants": selected_participants,
+                "memo": memo
+            })
 
-        if payer not in participants:
-            st.error(f"{idx}번째 줄: 결제자 '{payer}'가 참여자 목록에 없습니다.")
-            st.stop()
+# ========================
+# 입력된 지출 목록 표시
+# ========================
+if st.session_state.expenses:
+    st.subheader("📋 입력된 지출 내역")
 
-        if currency not in exchange_rates:
-            st.error(f"{idx}번째 줄: 통화 '{currency}' 환율이 없습니다.")
-            st.stop()
+    df_preview = pd.DataFrame([
+        {
+            "날짜": e["date"],
+            "항목": e["category"],
+            "결제자": e["payer"],
+            "금액": f'{e["amount"]} {e["currency"]}',
+            "참여자": ", ".join(e["participants"]),
+            "메모": e["memo"]
+        }
+        for e in st.session_state.expenses
+    ])
 
-        expense_participants = [
-            p.strip() for p in participant_str.split("|") if p.strip()
-        ]
+    st.dataframe(df_preview, use_container_width=True)
 
-        if not expense_participants:
-            st.error(f"{idx}번째 줄: 참여자가 비어 있습니다.")
-            st.stop()
-
-        try:
-            amount = float(amount)
-        except ValueError:
-            st.error(f"{idx}번째 줄: 금액이 숫자가 아닙니다.")
-            st.stop()
-
-        expenses.append({
-            "date": date,
-            "category": category,
-            "payer": payer,
-            "currency": currency,
-            "amount": amount,
-            "participants": expense_participants,
-            "memo": memo
-        })
+    if st.button("🗑️ 지출 전체 삭제"):
+        st.session_state.expenses = []
+        st.experimental_rerun()
 
 # ========================
 # 정산 계산
 # ========================
+st.divider()
+
 if st.button("🧮 정산 계산"):
+    if not st.session_state.expenses:
+        st.warning("지출 내역을 먼저 입력하세요.")
+        st.stop()
+
     paid = {p: 0 for p in participants}
     owed = {p: 0 for p in participants}
     expense_rows = []
 
-    for e in expenses:
+    for e in st.session_state.expenses:
         krw = e["amount"] * exchange_rates[e["currency"]]
         share = krw / len(e["participants"])
 
