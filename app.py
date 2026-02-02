@@ -53,7 +53,17 @@ except Exception:
     st.stop()
 
 # ========================
-# 지출 입력 (폼 UI)
+# 항목 리스트
+# ========================
+DEFAULT_CATEGORIES = [
+    "숙소", "식당", "교통", "액티비티", "쇼핑", "준비물", "기타"
+]
+
+if "categories" not in st.session_state:
+    st.session_state.categories = DEFAULT_CATEGORIES.copy()
+
+# ========================
+# 지출 입력 UI
 # ========================
 st.header("💳 지출 내역 입력")
 
@@ -63,13 +73,20 @@ if "expenses" not in st.session_state:
 with st.form("expense_form", clear_on_submit=True):
     col1, col2, col3 = st.columns(3)
     exp_date = col1.date_input("날짜", value=date.today())
-    category = col2.text_input("항목 (예: 숙소, 식당)")
-    payer = col3.selectbox("결제자", participants)
+
+    category = col2.selectbox(
+        "항목",
+        st.session_state.categories
+    )
+
+    new_category = col3.text_input("새 항목 추가 (선택)")
 
     col4, col5, col6 = st.columns(3)
-    currency = col4.selectbox("통화", list(exchange_rates.keys()))
-    amount = col5.number_input("금액", min_value=0.0, step=1.0)
-    memo = col6.text_input("메모 (선택)")
+    payer = col4.selectbox("결제자", participants)
+    currency = col5.selectbox("통화", list(exchange_rates.keys()))
+    amount = col6.number_input("금액", min_value=0.0, step=1.0)
+
+    memo = st.text_input("메모 (선택)")
 
     st.markdown("**참여자 선택**")
     participant_checks = {
@@ -82,9 +99,12 @@ with st.form("expense_form", clear_on_submit=True):
     if submitted:
         selected_participants = [p for p, v in participant_checks.items() if v]
 
-        if not category:
-            st.warning("항목을 입력하세요.")
-        elif not selected_participants:
+        if new_category:
+            if new_category not in st.session_state.categories:
+                st.session_state.categories.append(new_category)
+            category = new_category
+
+        if not selected_participants:
             st.warning("참여자를 최소 1명 선택하세요.")
         else:
             st.session_state.expenses.append({
@@ -98,26 +118,37 @@ with st.form("expense_form", clear_on_submit=True):
             })
 
 # ========================
-# 입력된 지출 목록 표시
+# 입력된 지출 목록 + 선택 삭제
 # ========================
 if st.session_state.expenses:
     st.subheader("📋 입력된 지출 내역")
 
-    df_preview = pd.DataFrame([
-        {
-            "날짜": e["date"],
-            "항목": e["category"],
-            "결제자": e["payer"],
-            "금액": f'{e["amount"]} {e["currency"]}',
-            "참여자": ", ".join(e["participants"]),
-            "메모": e["memo"]
-        }
-        for e in st.session_state.expenses
-    ])
+    delete_flags = []
 
-    st.dataframe(df_preview, use_container_width=True)
+    for idx, e in enumerate(st.session_state.expenses):
+        col1, col2, col3, col4, col5, col6 = st.columns(
+            [0.5, 1.5, 1, 1, 2, 2]
+        )
 
-    if st.button("🗑️ 지출 전체 삭제"):
+        delete_flags.append(
+            col1.checkbox("", key=f"del_{idx}")
+        )
+        col2.write(e["date"])
+        col3.write(e["category"])
+        col4.write(f'{e["amount"]} {e["currency"]}')
+        col5.write(e["payer"])
+        col6.write(", ".join(e["participants"]))
+
+    col_a, col_b = st.columns(2)
+
+    if col_a.button("🗑️ 선택한 지출 삭제"):
+        st.session_state.expenses = [
+            e for i, e in enumerate(st.session_state.expenses)
+            if not delete_flags[i]
+        ]
+        st.experimental_rerun()
+
+    if col_b.button("🗑️ 지출 전체 삭제"):
         st.session_state.expenses = []
         st.experimental_rerun()
 
