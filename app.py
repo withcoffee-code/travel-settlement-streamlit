@@ -1,29 +1,40 @@
 import streamlit as st
-from datetime import date
-import json
-from io import BytesIO
-from collections import defaultdict
 import pandas as pd
+from datetime import date, datetime
+from io import BytesIO
 
-# --------------------------------------------------
-# 기본 설정
-# --------------------------------------------------
-st.set_page_config(page_title="여행 경비 정산", page_icon="💸", layout="wide")
+# -------------------------------
+# 기본 세팅
+# -------------------------------
+st.set_page_config(page_title="여행 공동경비 정산", layout="wide")
 
-st.session_state.setdefault("trip_name", "새 여행")
-st.session_state.setdefault("participants", [])
-st.session_state.setdefault("expenses", [])
-st.session_state.setdefault("edit_index", None)
+if "participants" not in st.session_state:
+    st.session_state.participants = []
 
-# --------------------------------------------------
-# 유틸 함수
-# --------------------------------------------------
-def save_json(data):
-    buf = BytesIO()
-    buf.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
-    buf.seek(0)
-    return buf
+if "expenses" not in st.session_state:
+    st.session_state.expenses = []
 
+if "edit_index" not in st.session_state:
+    st.session_state.edit_index = None
+
+if "focus_amount" not in st.session_state:
+    st.session_state.focus_amount = False
+
+if "trip_name" not in st.session_state:
+    st.session_state.trip_name = "여행_정산"
+
+rates = {
+    "KRW": 1,
+    "JPY": 9.2,
+    "USD": 1350,
+    "EUR": 1450
+}
+
+categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
+
+# -------------------------------
+# 엑셀 생성
+# -------------------------------
 def make_excel(expenses, summary_df):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -32,80 +43,78 @@ def make_excel(expenses, summary_df):
     buf.seek(0)
     return buf
 
-# --------------------------------------------------
-# 타이틀
-# --------------------------------------------------
-st.title("💸 여행 경비 정산")
-st.session_state.trip_name = st.text_input("여행 이름", st.session_state.trip_name)
+# -------------------------------
+# 제목
+# -------------------------------
+st.title("✈️ 여행 공동경비 정산")
 
-# --------------------------------------------------
+st.text_input("여행 이름", key="trip_name")
+
+# -------------------------------
 # 참여자 관리
-# --------------------------------------------------
-st.subheader("👥 여행 참여자")
+# -------------------------------
+st.subheader("👥 참여자")
 
-col_p1, col_p2 = st.columns([3, 1])
-with col_p1:
-    new_name = st.text_input("이름 입력 후 Enter", key="new_participant")
-with col_p2:
-    if st.button("추가") and new_name:
+with st.form("add_participant", clear_on_submit=True):
+    new_name = st.text_input("이름 입력 후 Enter", placeholder="예: 엄마, 아빠, 민수")
+    add_p = st.form_submit_button("추가")
+
+    if add_p and new_name:
         if new_name not in st.session_state.participants:
             st.session_state.participants.append(new_name)
-            st.rerun()
+        st.rerun()
 
 if st.session_state.participants:
-    st.write("참여자:", ", ".join(st.session_state.participants))
+    st.write("현재 참여자:", ", ".join(st.session_state.participants))
 
-# --------------------------------------------------
-# 환율
-# --------------------------------------------------
-st.subheader("💱 환율 (KRW 기준)")
-rates = {
-    "KRW": 1.0,
-    "USD": st.number_input("USD → KRW", 1350.0),
-    "JPY": st.number_input("JPY → KRW", 9.0),
-    "EUR": st.number_input("EUR → KRW", 1450.0),
-}
-
-# --------------------------------------------------
+# -------------------------------
 # 지출 입력
-# --------------------------------------------------
+# -------------------------------
 st.subheader("🧾 지출 입력")
 
 if not st.session_state.participants:
-    st.warning("먼저 여행 참여자를 추가해 주세요.")
-else:
-    editing = st.session_state.edit_index
-    base = st.session_state.expenses[editing] if editing is not None else {}
+    st.info("참여자를 먼저 추가해 주세요.")
+    st.stop()
 
-    col1, col2, col3 = st.columns(3)
+editing = st.session_state.edit_index
+base = st.session_state.expenses[editing] if editing is not None else {}
 
-    with col1:
+with st.form("expense_form", clear_on_submit=True):
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
         e_date = st.date_input(
             "날짜",
             value=date.fromisoformat(base.get("date", str(date.today())))
         )
         category = st.selectbox(
             "항목",
-            ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"],
-            index=["숙박","식사","카페","교통","쇼핑","액티비티","기타"].index(
-                base.get("category", "숙박")
-            )
+            categories,
+            index=categories.index(base.get("category", "숙박")),
+            on_change=lambda: setattr(st.session_state, "focus_amount", True)
         )
 
-    with col2:
+    with c2:
         payer = st.selectbox(
             "결제자",
             st.session_state.participants,
             index=st.session_state.participants.index(base["payer"])
-            if editing is not None and base.get("payer") in st.session_state.participants else 0
+            if base.get("payer") in st.session_state.participants else 0
         )
-        currency = st.selectbox("통화", list(rates.keys()))
+        currency = st.selectbox(
+            "통화",
+            list(rates.keys()),
+            index=list(rates.keys()).index(base.get("currency", "KRW"))
+        )
 
-    with col3:
+    with c3:
         amount = st.number_input(
-            "금액",
+            "금액 (Enter로 저장)",
             min_value=0,
-            value=int(base.get("amount", 0))
+            step=1000,
+            value=int(base.get("amount", 0)),
+            autofocus=st.session_state.focus_amount
         )
         memo = st.text_input("메모", base.get("memo", ""))
 
@@ -115,7 +124,9 @@ else:
         default=base.get("participants", st.session_state.participants)
     )
 
-    if st.button("저장"):
+    submit = st.form_submit_button("저장")
+
+    if submit:
         data = {
             "date": str(e_date),
             "category": category,
@@ -124,107 +135,115 @@ else:
             "amount": amount,
             "amount_krw": int(amount * rates[currency]),
             "participants": participants_selected,
-            "memo": memo
+            "memo": memo,
+            "created_at": datetime.now().isoformat()
         }
+
         if editing is None:
             st.session_state.expenses.append(data)
         else:
             st.session_state.expenses[editing] = data
             st.session_state.edit_index = None
+
+        st.session_state.focus_amount = False
         st.rerun()
 
-# --------------------------------------------------
-# 지출 내역
-# --------------------------------------------------
+# -------------------------------
+# 지출 리스트 (최신순)
+# -------------------------------
 st.subheader("📋 지출 내역")
 
-if not st.session_state.expenses:
-    st.info("아직 지출이 없습니다.")
-else:
-    for i, e in enumerate(st.session_state.expenses):
-        col_a, col_b, col_c, col_d = st.columns([2,4,3,1])
-        col_a.write(e["date"])
-        col_b.write(f"{e['category']} | {e['payer']}")
-        col_c.write(f"{e['amount_krw']:,}원 ({e['currency']})")
-        if col_d.button("✏️ 수정", key=f"edit_{i}"):
-            st.session_state.edit_index = i
-            st.rerun()
-
-# --------------------------------------------------
-# 정산 결과
-# --------------------------------------------------
-st.subheader("📊 정산 결과")
-
-paid = defaultdict(int)
-owed = defaultdict(int)
-
-for e in st.session_state.expenses:
-    paid[e["payer"]] += e["amount_krw"]
-    if e["participants"]:
-        share = e["amount_krw"] / len(e["participants"])
-        for p in e["participants"]:
-            owed[p] += share
-
-summary = []
-for p in st.session_state.participants:
-    summary.append({
-        "이름": p,
-        "낸 금액": paid[p],
-        "써야 할 금액": int(owed[p]),
-        "차액": int(paid[p] - owed[p])
-    })
-
-df_summary = pd.DataFrame(summary)
-st.dataframe(df_summary, use_container_width=True)
-
-# --------------------------------------------------
-# 송금 가이드
-# --------------------------------------------------
-st.subheader("💸 누가 누구에게 보내면 될까요")
-
-senders = [[r["이름"], -r["차액"]] for r in summary if r["차액"] < 0]
-receivers = [[r["이름"], r["차액"]] for r in summary if r["차액"] > 0]
-
-i = j = 0
-if not senders and not receivers:
-    st.success("정산 완료! 송금할 내역이 없습니다 🎉")
-else:
-    while i < len(senders) and j < len(receivers):
-        amt = min(senders[i][1], receivers[j][1])
-        st.write(f"👉 {senders[i][0]} → {receivers[j][0]} : {amt:,.0f}원")
-        senders[i][1] -= amt
-        receivers[j][1] -= amt
-        if senders[i][1] == 0:
-            i += 1
-        if receivers[j][1] == 0:
-            j += 1
-
-# --------------------------------------------------
-# 저장 / 불러오기 / 엑셀
-# --------------------------------------------------
-st.subheader("💾 저장 & 불러오기")
-
-st.download_button(
-    "📥 여행 상태 저장 (JSON)",
-    save_json({
-        "trip_name": st.session_state.trip_name,
-        "participants": st.session_state.participants,
-        "expenses": st.session_state.expenses
-    }),
-    file_name=f"{st.session_state.trip_name}.json"
+st.session_state.expenses.sort(
+    key=lambda x: (x["date"], x["created_at"]),
+    reverse=True
 )
 
+delete_flags = []
+
+for idx, e in enumerate(st.session_state.expenses):
+    col1, col2, col3, col4, col5 = st.columns([0.6, 2, 2, 1.5, 1])
+
+    with col1:
+        delete_flags.append(
+            st.checkbox(
+                "삭제",
+                key=f"del_{idx}",
+                label_visibility="collapsed"
+            )
+        )
+
+    with col2:
+        st.write(f"📅 {e['date']} | {e['category']}")
+
+    with col3:
+        st.write(f"{e['payer']} → {', '.join(e['participants'])}")
+
+    with col4:
+        st.write(f"{e['amount_krw']:,} 원")
+
+    with col5:
+        if st.button("✏️", key=f"edit_{idx}"):
+            st.session_state.edit_index = idx
+            st.rerun()
+
+if any(delete_flags):
+    if st.button("🗑️ 선택 지출 삭제"):
+        st.session_state.expenses = [
+            e for i, e in enumerate(st.session_state.expenses)
+            if not delete_flags[i]
+        ]
+        st.rerun()
+
+# -------------------------------
+# 정산 계산
+# -------------------------------
+st.subheader("📊 정산 결과")
+
+balances = {p: 0 for p in st.session_state.participants}
+
+for e in st.session_state.expenses:
+    share = e["amount_krw"] / len(e["participants"])
+    for p in e["participants"]:
+        balances[p] -= share
+    balances[e["payer"]] += e["amount_krw"]
+
+df_summary = pd.DataFrame(
+    [{"이름": k, "정산금액": int(v)} for k, v in balances.items()]
+)
+
+st.dataframe(df_summary, use_container_width=True)
+
+# -------------------------------
+# 송금 가이드
+# -------------------------------
+st.subheader("💸 누가 누구에게 보내면 될까요?")
+
+senders = {k: -v for k, v in balances.items() if v < 0}
+receivers = {k: v for k, v in balances.items() if v > 0}
+
+result = []
+
+for s, s_amt in senders.items():
+    for r, r_amt in receivers.items():
+        if s_amt == 0:
+            break
+        send = min(s_amt, r_amt)
+        if send > 0:
+            result.append(f"{s} ➜ {r} : {int(send):,}원")
+            senders[s] -= send
+            receivers[r] -= send
+
+if result:
+    for r in result:
+        st.write(r)
+else:
+    st.success("이미 정산 완료되었습니다 🎉")
+
+# -------------------------------
+# 엑셀 다운로드
+# -------------------------------
 st.download_button(
     "📊 엑셀 다운로드",
     make_excel(st.session_state.expenses, df_summary),
     file_name=f"{st.session_state.trip_name}.xlsx"
 )
-
-uploaded = st.file_uploader("📂 저장된 여행 불러오기", type="json")
-if uploaded:
-    data = json.load(uploaded)
-    st.session_state.trip_name = data["trip_name"]
-    st.session_state.participants = data["participants"]
-    st.session_state.expenses = data["expenses"]
-    st.session_state.edit_index = None
-    st.rerun()
