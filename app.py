@@ -31,12 +31,11 @@ st.markdown(
     f"""
     <style>
       .main-title {{
-        font-size: 26px;   /* 아이폰 한 줄에 보이게 살짝 다운 */
+        font-size: 26px;
         font-weight: 800;
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
       }}
-      /* 소제목 폰트(요청: 반으로 줄이기 느낌) */
       [data-testid="stMarkdownContainer"] h2 {{
         font-size: 1.02rem !important;
         font-weight: 700 !important;
@@ -88,7 +87,6 @@ ss_setdefault("save_filename_ui", None)
 ss_setdefault("save_filename_touched", False)
 ss_setdefault("last_saved_filename", None)
 
-# UI 상태 (안전하게 키 충돌 피하려고 nonce 사용)
 ss_setdefault("ui_nonce", 0)
 ss_setdefault("editing_id", None)
 
@@ -163,13 +161,12 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         payer_only = bool(e.get("payer_only", False))
         beneficiary = (e.get("beneficiary") or "").strip()
 
-        # 계산 분배 대상
         if beneficiary:
-            split_ps = [beneficiary]      # 대신부담(전액)
+            split_ps = [beneficiary]
         elif payer_only:
-            split_ps = [payer]            # 결제자 전액부담
+            split_ps = [payer]
         else:
-            split_ps = display_ps         # 일반 n분의1
+            split_ps = display_ps
 
         if not split_ps:
             continue
@@ -254,7 +251,7 @@ def find_expense(exp_id: str):
     return None
 
 # -------------------------------
-# 저장 파일명 동기화 (여행명 바꾸면 자동 반영, 사용자가 손대면 고정)
+# 저장 파일명 동기화
 # -------------------------------
 def on_save_filename_change():
     st.session_state.save_filename_touched = True
@@ -294,11 +291,9 @@ with st.sidebar:
             ensure_expense_ids()
             st.session_state.last_loaded_sig = sig
 
-            # 저장파일명 자동 동기화(사용자 편집 전이라면)
             if not st.session_state.save_filename_touched:
                 st.session_state.save_filename_ui = st.session_state.trip_name_ui
 
-            # 편집 모드 종료 + UI 새로 만들기
             st.session_state.editing_id = None
             st.session_state.ui_nonce += 1
 
@@ -343,7 +338,6 @@ with st.sidebar:
             if name not in st.session_state.participants:
                 if len(st.session_state.participants) < 8:
                     st.session_state.participants.append(name)
-                    # UI 새로 만들기(키 충돌 없이)
                     st.session_state.ui_nonce += 1
                     queue_toast("참여자가 추가되었습니다 ✅")
                 else:
@@ -390,7 +384,6 @@ st.subheader("🧾 지출 입력")
 editing = st.session_state.editing_id is not None
 target = find_expense(st.session_state.editing_id) if editing else None
 if editing and target is None:
-    # 편집 중 항목이 삭제되었을 때
     st.session_state.editing_id = None
     st.session_state.ui_nonce += 1
     editing = False
@@ -399,7 +392,6 @@ if editing and target is None:
 if editing:
     st.markdown('<div class="edit-banner">✏️ 수정 모드: 아래 내용을 수정한 뒤 “수정 저장”을 누르세요.</div>', unsafe_allow_html=True)
 
-# 편집 기본값
 def_val_date = safe_date_from_str(target["date"]) if editing else date.today()
 def_val_cat = target.get("category", categories[0]) if editing else categories[0]
 def_val_payer = target.get("payer", st.session_state.participants[0]) if editing else st.session_state.participants[0]
@@ -412,7 +404,6 @@ def_val_beneficiary = (target.get("beneficiary", "") or "").strip() if editing e
 
 ui_nonce = st.session_state.ui_nonce
 
-# 결제자/전액/대신부담은 폼 밖(즉시 갱신)
 payer = st.selectbox(
     "결제자",
     st.session_state.participants,
@@ -432,7 +423,6 @@ payer_not_owed = st.checkbox(
     key=f"payer_not_owed_{ui_nonce}",
 )
 
-# 충돌 경고(저장 시 막음)
 if payer_only and payer_not_owed:
     st.warning("전액 옵션은 하나만 선택해 주세요. (저장 시 검증됩니다)")
 
@@ -440,8 +430,6 @@ beneficiary = ""
 if payer_not_owed:
     candidates = [p for p in st.session_state.participants if p != payer]
     if candidates:
-        # 결제자 바뀌면 beneficiary 위젯 키 자체가 바뀌어서
-        # '결제자가 후보에 남는 문제'가 구조적으로 사라짐
         init_b = def_val_beneficiary if def_val_beneficiary in candidates else candidates[0]
         beneficiary = st.selectbox(
             "전액 부담자(대신 내는 사람) 선택",
@@ -453,7 +441,6 @@ if payer_not_owed:
     else:
         st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
-# 입력 폼(저장은 submit 1개)
 with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -484,7 +471,6 @@ with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
         st.rerun()
 
     if submitted:
-        # 검증
         if payer_only and payer_not_owed:
             st.error("전액 옵션은 하나만 선택해 주세요.")
             st.stop()
@@ -513,14 +499,13 @@ with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
             "currency": currency,
             "amount": float(amt),
             "amount_krw": amount_krw,
-            "participants": ps_display,  # 표시용
+            "participants": ps_display,
             "payer_only": bool(payer_only) if not payer_not_owed else False,
             "beneficiary": beneficiary if payer_not_owed else "",
             "memo": memo,
         }
 
         if editing:
-            # update
             for i, e in enumerate(st.session_state.expenses):
                 if e.get("id") == target["id"]:
                     item["created_at"] = e.get("created_at", datetime.now().isoformat())
@@ -534,12 +519,11 @@ with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
             st.session_state.expenses.append(item)
             queue_toast("지출이 추가되었습니다 ✅")
 
-        # UI 키 갱신(리셋 효과) - session_state 직접 대입 없이 안전
         st.session_state.ui_nonce += 1
         st.rerun()
 
 # -------------------------------
-# 지출 내역 표 (단일 체크박스 + 수정/삭제 버튼)
+# 지출 내역 표 (결제자/참여자 컬럼 분리)
 # -------------------------------
 st.subheader("📋 지출 내역")
 
@@ -561,19 +545,15 @@ if st.session_state.expenses:
             note_parts.append(f"대신부담: {e['beneficiary']}")
         if e.get("payer_only", False):
             note_parts.append("전액부담")
-
         note = " / ".join(note_parts)
-
-        # 표시 형식 요청 반영: 결제자 : A | 참여자 : A, B
-        payer_txt = f"결제자 : {e.get('payer','')}"
-        ps_txt = f"참여자 : {', '.join(e.get('participants', []))}"
 
         rows.append({
             "선택": False,
             "날짜": e.get("date", ""),
             "항목": e.get("category", ""),
             "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
-            "결제/참여": f"{payer_txt} | {ps_txt}",
+            "결제자": e.get("payer", ""),
+            "참여자": ", ".join(e.get("participants", [])),
             "비고": note,
         })
 
@@ -584,7 +564,7 @@ if st.session_state.expenses:
         hide_index=True,
         use_container_width=True,
         column_config={"선택": st.column_config.CheckboxColumn("선택", default=False)},
-        disabled=["날짜", "항목", "금액(원)", "결제/참여", "비고"],
+        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자", "비고"],
     )
 
     selected_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("선택")]
@@ -642,6 +622,40 @@ else:
     show_trans = transfers_df.copy()
     show_trans["금액(원)"] = show_trans["금액(원)"].apply(lambda x: f"{int(x):,}")
     st.dataframe(show_trans, use_container_width=True)
+
+# -------------------------------
+# ✅ 항목별 지출 통계 (다운로드 위에 표시)
+# -------------------------------
+st.subheader("📌 항목별 지출 총액")
+
+if st.session_state.expenses:
+    exp_df_stat = pd.DataFrame(st.session_state.expenses)
+    if not exp_df_stat.empty and "category" in exp_df_stat.columns:
+        cat_df = (
+            exp_df_stat.groupby("category", as_index=False)["amount_krw"]
+            .sum()
+            .rename(columns={"category": "항목", "amount_krw": "총액(원)"})
+            .sort_values("총액(원)", ascending=False)
+        )
+
+        total_all = int(exp_df_stat["amount_krw"].sum()) if "amount_krw" in exp_df_stat.columns else 0
+        cat_df_show = cat_df.copy()
+        cat_df_show["총액(원)"] = cat_df_show["총액(원)"].apply(lambda x: f"{int(x):,}")
+
+        st.dataframe(cat_df_show, use_container_width=True)
+
+        st.markdown(
+            f"""
+            <div style="text-align:right; font-weight:800; font-size:1.05rem; margin-top:6px;">
+            합계: {total_all:,} 원
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.info("통계를 계산할 지출 데이터가 없습니다.")
+else:
+    st.info("지출이 없어서 통계를 표시할 수 없습니다.")
 
 # -------------------------------
 # 다운로드
