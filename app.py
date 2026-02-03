@@ -8,6 +8,7 @@ import hashlib
 import re
 import streamlit.components.v1 as components
 import zipfile
+import time
 
 # -------------------------------
 # Excel 엔진 가용성 체크
@@ -54,6 +55,10 @@ st.session_state.setdefault("exp_payer_not_owed", False)
 st.session_state.setdefault("exp_beneficiary", "")
 
 st.session_state.setdefault("_last_error", "")
+
+# ✅ 중복 저장 방지용 락/타임스탬프
+st.session_state.setdefault("_save_lock", False)
+st.session_state.setdefault("_last_save_ts", 0.0)
 
 # -------------------------------
 # 토스트 유틸
@@ -162,8 +167,6 @@ def make_csv_zip(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_
 
 # -------------------------------
 # 정산 계산(원 단위 정확 분배)
-# - payer_only: 결제자가 전액 부담
-# - beneficiary: 대신 부담자 1명 전액 부담(결제자는 부담 안 함)
 # -------------------------------
 def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
     n = len(people)
@@ -247,7 +250,7 @@ def parse_amount_text(s: str) -> float:
         return 0.0
     s = s.strip()
     if s == "":
-        return 0.0
+        raise ValueError("금액을 입력해 주세요.")
     s = s.replace(",", "")
     if not re.fullmatch(r"\d+(\.\d+)?", s):
         raise ValueError("금액은 숫자만 입력해 주세요. (예: 12,000 또는 12000)")
@@ -257,7 +260,7 @@ def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
 # -------------------------------
-# 저장 파일명 자동 동기화 (사용자가 수정하기 전까지만)
+# 저장 파일명 자동 동기화
 # -------------------------------
 def on_save_filename_change():
     st.session_state.save_filename_touched = True
@@ -269,73 +272,95 @@ if not st.session_state.save_filename_touched:
     st.session_state.save_filename_ui = st.session_state.trip_name_ui
 
 # -------------------------------
-# ✅ 저장 콜백 (중요: 위젯 키 리셋은 반드시 콜백 안에서!)
+# ✅ 중복 저장 방지 포함: 저장 콜백
 # -------------------------------
-def add_expense_from_ui():
-    st.session_state._last_error = ""
-
-    payer = st.session_state.exp_payer
-    payer_only = bool(st.session_state.exp_payer_only)
-    payer_not_owed = bool(st.session_state.exp_payer_not_owed)
-
-    if payer_only and payer_not_owed:
-        st.session_state._last_error = "전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요."
+def add_expense_from_ui(source: str):
+    # 1) 락: 저장 중이면 무시
+    if st.session_state._save_lock:
         return
 
-    ps_display = st.session_state.exp_participants or []
-    if not ps_display:
-        st.session_state._last_error = "참여자를 최소 1명 이상 선택하세요."
+    now = time.time()
+
+    # 2) 아주 짧은 시간(0.5초) 내 중복 호출 방지
+    #    Enter 저장 직후 버튼이 또 들어오는 케이스 방지
+    if now - st.session_state._last_save_ts < 0.5:
         return
 
-    beneficiary = ""
-    if payer_not_owed:
-        beneficiary = (st.session_state.exp_beneficiary or "").strip()
-        if beneficiary == "":
-            st.session_state._last_error = "대신 부담자를 선택해 주세요."
+    st.session_state._save_lock = True
+    try:
+        st.session_state._last_error = ""
+
+        payer = st.session_state.exp_payer
+        payer_only = bool(st.session_state.exp_payer_only)
+        payer_not_owed = bool(st.session_state.exp_payer_not_owed)
+
+        if payer_only and payer_not_owed:
+            st.session_state._last_error = "전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요."
             return
 
-    try:
-        amt = parse_amount_text(st.session_state.exp_amount)
-    except ValueError as e:
-        st.session_state._last_error = str(e)
-        return
+        ps_display = st.session_state.exp_participants or []
+        if not ps_display:
+            st.session_state._last_error = "참여자를 최소 1명 이상 선택하세요."
+            return
 
-    amount_krw = int(round(float(amt) * st.session_state.rates[st.session_state.exp_currency]))
+        beneficiary = ""
+        if payer_not_owed:
+            beneficiary = (st.session_state.exp_beneficiary or "").strip()
+            if beneficiary == "":
+                st.session_state._last_error = "대신 부담자를 선택해 주세요."
+                return
 
-    st.session_state.expenses.append({
-        "date": str(st.session_state.exp_date),
-        "category": st.session_state.exp_category,
-        "payer": payer,
-        "currency": st.session_state.exp_currency,
-        "amount": float(amt),
-        "amount_krw": amount_krw,
-        "participants": ps_display,          # 표시용
-        "payer_only": bool(payer_only),      # 계산용
-        "beneficiary": beneficiary,          # 계산용
-        "memo": st.session_state.exp_memo,
-        "created_at": datetime.now().isoformat()
-    })
+        # 3) 금액 비어있거나 0 저장 방지
+        try:
+            amt = parse_amount_text(st.session_state.exp_amount)
+        except ValueError as e:
+            st.session_state._last_error = str(e)
+            return
 
-    # ✅ 여기서만 위젯 키들 안전하게 리셋
-    st.session_state.exp_amount = ""
-    st.session_state.exp_memo = ""
-    st.session_state.exp_payer_only = False
-    st.session_state.exp_payer_not_owed = False
-    st.session_state.exp_beneficiary = ""
-    st.session_state.exp_participants = list(st.session_state.participants)
+        if amt <= 0:
+            st.session_state._last_error = "금액은 0보다 커야 합니다."
+            return
 
-    queue_toast("지출이 추가되었습니다 ✅")
+        amount_krw = int(round(float(amt) * st.session_state.rates[st.session_state.exp_currency]))
+
+        st.session_state.expenses.append({
+            "date": str(st.session_state.exp_date),
+            "category": st.session_state.exp_category,
+            "payer": payer,
+            "currency": st.session_state.exp_currency,
+            "amount": float(amt),
+            "amount_krw": amount_krw,
+            "participants": ps_display,
+            "payer_only": bool(payer_only),
+            "beneficiary": beneficiary,
+            "memo": st.session_state.exp_memo,
+            "created_at": datetime.now().isoformat()
+        })
+
+        # ✅ 리셋(콜백 안에서만)
+        st.session_state.exp_amount = ""
+        st.session_state.exp_memo = ""
+        st.session_state.exp_payer_only = False
+        st.session_state.exp_payer_not_owed = False
+        st.session_state.exp_beneficiary = ""
+        st.session_state.exp_participants = list(st.session_state.participants)
+
+        st.session_state._last_save_ts = now
+        queue_toast("지출이 추가되었습니다 ✅")
+    finally:
+        st.session_state._save_lock = False
 
 def on_amount_enter():
-    # 금액 입력 후 Enter(값 변경 확정) 시 저장
-    add_expense_from_ui()
+    add_expense_from_ui("enter")
+
+def on_save_button():
+    add_expense_from_ui("button")
 
 # -------------------------------
-# ✅ 사이드바: 설정
+# 사이드바
 # -------------------------------
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
-
     st.markdown(
         f"""
         <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
@@ -348,28 +373,22 @@ with st.sidebar:
     st.write("")
 
     st.markdown("### 💾 여행 파일")
-
     uploaded = st.file_uploader("여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader_sidebar")
     if uploaded is not None:
         raw = uploaded.getvalue()
         sig = hashlib.sha256(raw).hexdigest()
         if st.session_state.last_loaded_sig != sig:
             data = json.loads(raw.decode("utf-8"))
-
             st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
             st.session_state.participants = data.get("participants", [])
             st.session_state.expenses = data.get("expenses", [])
-
             for e in st.session_state.expenses:
                 e.setdefault("created_at", datetime.now().isoformat())
                 e.setdefault("payer_only", False)
                 e.setdefault("beneficiary", "")
-
             st.session_state.last_loaded_sig = sig
-
             if not st.session_state.save_filename_touched:
                 st.session_state.save_filename_ui = st.session_state.trip_name_ui
-
             queue_toast("설정이 자동 반영되었습니다 ✅ (여행 파일 불러옴)")
             st.rerun()
 
@@ -431,14 +450,12 @@ with st.sidebar:
     st.session_state.rates = {"KRW": 1.0, "USD": float(r_usd), "JPY": float(r_jpy), "EUR": float(r_eur)}
 
 # -------------------------------
-# 메인: 토스트 표시
+# 메인
 # -------------------------------
 flush_toast()
 
-# -------------------------------
-# 메인 타이틀 / 여행 이름
-# -------------------------------
 st.markdown('<div class="main-title">여행 공동경비 정산</div>', unsafe_allow_html=True)
+
 st.subheader("🧳 여행 이름")
 st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
@@ -449,14 +466,13 @@ if not st.session_state.participants:
 rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
-# 지출 입력 기본값 세팅 (위젯 생성 전에!)
 if st.session_state.exp_payer is None:
     st.session_state.exp_payer = st.session_state.participants[0]
 if not st.session_state.exp_participants:
     st.session_state.exp_participants = list(st.session_state.participants)
 
 # -------------------------------
-# 지출 입력 UI
+# 지출 입력
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -489,7 +505,6 @@ with col_x1:
 with col_x2:
     st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="exp_payer_not_owed")
 
-# 체크 즉시 아래 선택창 표시
 if st.session_state.exp_payer_not_owed:
     candidates = [p for p in st.session_state.participants if p != st.session_state.exp_payer]
     if candidates:
@@ -498,12 +513,10 @@ if st.session_state.exp_payer_not_owed:
     else:
         st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
-# 충돌 경고
 if st.session_state.exp_payer_only and st.session_state.exp_payer_not_owed:
     st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
 
-# 저장 버튼도 콜백으로!
-st.button("저장", on_click=add_expense_from_ui)
+st.button("저장", on_click=on_save_button)
 
 if st.session_state._last_error:
     st.error(st.session_state._last_error)
@@ -525,7 +538,6 @@ if st.session_state.expenses:
     total_amount = 0
     for e in expenses_sorted:
         total_amount += int(e.get("amount_krw", 0))
-
         note = ""
         if e.get("beneficiary"):
             note = f"대신부담: {e['beneficiary']}"
@@ -579,7 +591,6 @@ else:
 # 정산 결과 + 송금 안내
 # -------------------------------
 st.subheader("📊 정산 결과")
-
 summary_df, transfers_df = compute_settlement(st.session_state.participants, st.session_state.expenses)
 
 show_summary = summary_df.copy()
@@ -596,7 +607,7 @@ else:
     st.dataframe(show_trans, use_container_width=True)
 
 # -------------------------------
-# 다운로드 (엑셀 / 대체 ZIP)
+# 다운로드
 # -------------------------------
 st.subheader("📥 다운로드")
 
