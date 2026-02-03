@@ -284,34 +284,70 @@ with st.form("expense_form", clear_on_submit=True):
             st.rerun()
 
 # -------------------------------
-# 지출 내역 (최신순 + 체크 삭제)
-# 표기: 결제자 : A | 참여자 : A, B, C
+# 지출 내역 (표 형식 + 체크 삭제 + 총액)
 # -------------------------------
-st.subheader("📋 지출 내역 (최근 날짜 순)")
+st.subheader("📋 지출 내역")
 
-st.session_state.expenses.sort(key=lambda x: (x.get("date", ""), x.get("created_at", "")), reverse=True)
+if st.session_state.expenses:
+    # 최신 날짜 순 정렬
+    expenses_sorted = sorted(
+        st.session_state.expenses,
+        key=lambda x: (x.get("date", ""), x.get("created_at", "")),
+        reverse=True
+    )
 
-delete_flags = []
-for i, e in enumerate(st.session_state.expenses):
-    col1, col2, col3 = st.columns([0.6, 6.2, 1.4])
+    # DataFrame 변환
+    table_rows = []
+    total_amount = 0
 
-    with col1:
-        delete_flags.append(st.checkbox("삭제", key=f"del_{i}", label_visibility="collapsed"))
+    for e in expenses_sorted:
+        total_amount += int(e["amount_krw"])
+        table_rows.append({
+            "삭제": False,
+            "날짜": e["date"],
+            "항목": e["category"],
+            "금액(원)": f"{int(e['amount_krw']):,}",
+            "결제자": e["payer"],
+            "참여자": ", ".join(e["participants"]),
+        })
 
-    with col2:
-        payer_txt = e.get("payer", "")
-        ps_txt = ", ".join(e.get("participants", []))
-        st.write(f"📅 {e['date']} | {e['category']}  —  결제자 : {payer_txt} | 참여자 : {ps_txt}")
-        if e.get("memo"):
-            st.caption(f"메모: {e['memo']}")
+    df_table = pd.DataFrame(table_rows)
 
-    with col3:
-        st.write(f"{int(e['amount_krw']):,}원")
+    # ✅ 표 + 체크박스
+    edited_df = st.data_editor(
+        df_table,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "삭제": st.column_config.CheckboxColumn(
+                "삭제",
+                help="삭제할 지출을 선택하세요",
+                default=False,
+            )
+        }
+    )
 
-if any(delete_flags):
+    # 삭제 버튼
     if st.button("🗑️ 선택 지출 삭제"):
-        st.session_state.expenses = [e for idx, e in enumerate(st.session_state.expenses) if not delete_flags[idx]]
+        keep = []
+        for keep_row, edited_row in zip(expenses_sorted, edited_df.to_dict("records")):
+            if not edited_row["삭제"]:
+                keep.append(keep_row)
+        st.session_state.expenses = keep
         st.rerun()
+
+    # 총액 표시
+    st.markdown(
+        f"""
+        <div style="text-align:right; font-weight:700; font-size:1.1rem; margin-top:0.5em;">
+        💰 현재까지 총 지출: {total_amount:,} 원
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+else:
+    st.info("아직 입력된 지출이 없습니다.")
 
 # -------------------------------
 # 정산 결과 + 송금 안내
