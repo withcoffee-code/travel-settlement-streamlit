@@ -20,12 +20,34 @@ st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
 st.session_state.setdefault("last_loaded_sig", None)
 
+# 설정 변화 감지용 시그니처
+st.session_state.setdefault("settings_sig", None)
+
+# 토스트 메시지 (rerun 후 띄우기)
+st.session_state.setdefault("toast_msg", None)
+
+# -------------------------------
+# 토스트 유틸
+# -------------------------------
+def queue_toast(msg: str):
+    st.session_state.toast_msg = msg
+
+def flush_toast():
+    if st.session_state.toast_msg:
+        try:
+            st.toast(st.session_state.toast_msg)
+        except Exception:
+            # st.toast가 없는 구버전이면 조용히 무시
+            pass
+        st.session_state.toast_msg = None
+
 # -------------------------------
 # UI: 소제목 폰트 50% (bold 유지)
 # -------------------------------
 st.markdown(
     """
     <style>
+      /* Streamlit subheader 크기 줄이기 (대략 50%) */
       [data-testid="stMarkdownContainer"] h2 {
         font-size: 1.05rem !important;
         font-weight: 700 !important;
@@ -120,7 +142,7 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
     return summary_df, transfers_df
 
 # -------------------------------
-# 금액 입력 파서
+# 금액 입력 파서 (쉼표 허용)
 # -------------------------------
 def parse_amount_text(s: str) -> float:
     if s is None:
@@ -134,6 +156,112 @@ def parse_amount_text(s: str) -> float:
     return float(s)
 
 # -------------------------------
+# 총 지출 (KRW) 계산
+# -------------------------------
+def total_spent_krw() -> int:
+    return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
+
+# -------------------------------
+# ✅ 사이드바: 설정(파일/참여자/환율) + 총 지출 요약
+# -------------------------------
+with st.sidebar:
+    st.markdown("## ⚙️ 설정")
+
+    # 3️⃣ 사이드바 총 지출 요약
+    st.markdown(
+        f"""
+        <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
+          <div style="font-size:0.9rem; font-weight:700;">💰 현재 총 지출</div>
+          <div style="font-size:1.2rem; font-weight:800;">{total_spent_krw():,} 원</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write("")  # 여백
+
+    # ---------------------------
+    # 여행 파일 저장/불러오기
+    # ---------------------------
+    st.markdown("### 💾 여행 파일")
+
+    uploaded = st.file_uploader("여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader_sidebar")
+    if uploaded is not None:
+        raw = uploaded.getvalue()
+        sig = hashlib.sha256(raw).hexdigest()
+
+        if st.session_state.last_loaded_sig != sig:
+            data = json.loads(raw.decode("utf-8"))
+            st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
+            st.session_state.participants = data.get("participants", [])
+            st.session_state.expenses = data.get("expenses", [])
+            for e in st.session_state.expenses:
+                e.setdefault("created_at", datetime.now().isoformat())
+            st.session_state.last_loaded_sig = sig
+
+            queue_toast("설정이 자동 반영되었습니다 ✅ (여행 파일 불러옴)")
+            st.rerun()
+
+    st.download_button(
+        "📥 여행 파일 저장 (JSON)",
+        data=to_json_bytes({
+            "trip_name": st.session_state.trip_name_ui,
+            "participants": st.session_state.participants,
+            "expenses": st.session_state.expenses,
+        }),
+        file_name=f"{st.session_state.trip_name_ui}.json",
+        mime="application/json",
+        use_container_width=True
+    )
+
+    st.divider()
+
+    # ---------------------------
+    # 참여자 관리
+    # ---------------------------
+    st.markdown("### 👥 참여자")
+
+    with st.form("add_participant_sidebar", clear_on_submit=True):
+        name = st.text_input("이름 추가", placeholder="예: 엄마, 아빠, 민수")
+        add = st.form_submit_button("추가")
+        if add and name:
+            if name not in st.session_state.participants:
+                if len(st.session_state.participants) < 8:
+                    st.session_state.participants.append(name)
+                    queue_toast("설정이 자동 반영되었습니다 ✅ (참여자 추가)")
+                else:
+                    st.warning("최대 8명까지 가능합니다.")
+            st.rerun()
+
+    if st.session_state.participants:
+        st.caption("현재 참여자")
+        st.write(", ".join(st.session_state.participants))
+    else:
+        st.caption("참여자를 추가해 주세요.")
+
+    st.divider()
+
+    # ---------------------------
+    # 환율 설정 (세션에 저장)
+    # ---------------------------
+    st.markdown("### 💱 환율 (KRW 기준)")
+
+    # 환율 기본값/유지
+    st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
+
+    r_usd = st.number_input("USD", value=float(st.session_state.rates["USD"]), step=10.0, key="rate_usd")
+    r_jpy = st.number_input("JPY", value=float(st.session_state.rates["JPY"]), step=0.1, key="rate_jpy")
+    r_eur = st.number_input("EUR", value=float(st.session_state.rates["EUR"]), step=10.0, key="rate_eur")
+
+    # 매 실행마다 세션 환율 갱신
+    st.session_state.rates = {"KRW": 1.0, "USD": float(r_usd), "JPY": float(r_jpy), "EUR": float(r_eur)}
+
+# -------------------------------
+# 메인: 토스트 표시(한 번만)
+# -------------------------------
+flush_toast()
+
+# -------------------------------
 # 타이틀(아이폰 한 줄)
 # -------------------------------
 st.markdown(
@@ -142,92 +270,42 @@ st.markdown(
 )
 
 # -------------------------------
-# 파일 저장/불러오기
+# 메인: 여행 이름 + 설정 변경 감지(토스트)
 # -------------------------------
-st.subheader("💾 여행 파일 저장/불러오기")
-
-col_f1, col_f2 = st.columns([1, 1])
-
-with col_f2:
-    uploaded = st.file_uploader("📂 여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader")
-
-    if uploaded is not None:
-        raw = uploaded.getvalue()
-        sig = hashlib.sha256(raw).hexdigest()
-
-        if st.session_state.last_loaded_sig != sig:
-            data = json.loads(raw.decode("utf-8"))
-
-            st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
-            st.session_state.participants = data.get("participants", [])
-            st.session_state.expenses = data.get("expenses", [])
-
-            for e in st.session_state.expenses:
-                e.setdefault("created_at", datetime.now().isoformat())
-
-            st.session_state.last_loaded_sig = sig
-            st.success("파일에 저장된 상태로 화면에 복원했습니다 ✅")
-
 st.text_input("여행 이름", key="trip_name_ui")
-trip_name = st.session_state.trip_name_ui
 
-with col_f1:
-    save_payload = {
-        "trip_name": trip_name,
+# 설정 시그니처(변경 감지)
+def current_settings_sig() -> str:
+    payload = {
+        "trip_name": st.session_state.trip_name_ui,
         "participants": st.session_state.participants,
-        "expenses": st.session_state.expenses,
+        "rates": st.session_state.get("rates", {}),
     }
-    st.download_button(
-        "📥 여행 파일 저장 (JSON)",
-        data=to_json_bytes(save_payload),
-        file_name=f"{trip_name}.json",
-        mime="application/json",
-        use_container_width=True
-    )
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
-# -------------------------------
-# 참여자
-# -------------------------------
-st.subheader("👥 참여자 (최대 8명)")
-
-with st.form("add_participant_form", clear_on_submit=True):
-    name = st.text_input("이름 입력 후 Enter", placeholder="예: 엄마, 아빠, 민수")
-    submitted = st.form_submit_button("추가")
-    if submitted and name:
-        if name not in st.session_state.participants:
-            if len(st.session_state.participants) >= 8:
-                st.warning("최대 8명까지 가능합니다.")
-            else:
-                st.session_state.participants.append(name)
-        st.rerun()
-
-if st.session_state.participants:
-    st.write("현재 참여자:", ", ".join(st.session_state.participants))
+sig_now = current_settings_sig()
+if st.session_state.settings_sig is None:
+    st.session_state.settings_sig = sig_now
 else:
-    st.info("참여자를 먼저 추가해 주세요.")
+    if sig_now != st.session_state.settings_sig:
+        st.session_state.settings_sig = sig_now
+        # 2️⃣ 설정 변경 토스트
+        try:
+            st.toast("설정이 자동 반영되었습니다 ✅")
+        except Exception:
+            pass
+
+# 참여자 없으면 안내
+if not st.session_state.participants:
+    st.info("오른쪽 ⚙️ 설정에서 참여자를 먼저 추가해 주세요.")
     st.stop()
 
-# -------------------------------
-# 환율
-# -------------------------------
-st.subheader("💱 환율 (통화 → KRW)")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.number_input("KRW", value=1.0, step=1.0, disabled=True)
-with c2:
-    rate_USD = st.number_input("USD", value=1350.0, step=10.0)
-with c3:
-    rate_JPY = st.number_input("JPY", value=9.2, step=0.1)
-with c4:
-    rate_EUR = st.number_input("EUR", value=1450.0, step=10.0)
-
-rates = {"KRW": 1.0, "USD": float(rate_USD), "JPY": float(rate_JPY), "EUR": float(rate_EUR)}
+rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
-# 지출 입력 (Enter로 저장)
-# ✅ 수정 핵심: 저장 후 session_state.amount_text/memo_text 직접 변경 제거
-#             clear_on_submit=True가 자동으로 비워줌
+# 지출 입력 (Enter로 저장 / 쉼표 입력 가능 / 0 없음)
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -244,7 +322,7 @@ with st.form("expense_form", clear_on_submit=True):
 
     with c:
         amount_str = st.text_input(
-            "금액 (Enter로 저장)  ※ KRW/USD는 1,234 입력 가능",
+            "금액 (Enter로 저장)  ※ 1,234 입력 가능",
             placeholder="예: 12,000 또는 12000",
             key="amount_text"
         )
@@ -261,91 +339,87 @@ with st.form("expense_form", clear_on_submit=True):
     if save:
         if not participants_selected:
             st.warning("참여자를 최소 1명 이상 선택하세요.")
-        else:
-            try:
-                amt = parse_amount_text(amount_str)
-            except ValueError as e:
-                st.error(str(e))
-                st.stop()
+            st.stop()
 
-            amount_krw = int(round(float(amt) * rates[currency]))
+        try:
+            amt = parse_amount_text(amount_str)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
 
-            st.session_state.expenses.append({
-                "date": str(e_date),
-                "category": category,
-                "payer": payer,
-                "currency": currency,
-                "amount": float(amt),
-                "amount_krw": amount_krw,
-                "participants": participants_selected,
-                "memo": memo,
-                "created_at": datetime.now().isoformat()
-            })
-            st.rerun()
+        amount_krw = int(round(float(amt) * rates[currency]))
+
+        st.session_state.expenses.append({
+            "date": str(e_date),
+            "category": category,
+            "payer": payer,
+            "currency": currency,
+            "amount": float(amt),
+            "amount_krw": amount_krw,
+            "participants": participants_selected,
+            "memo": memo,
+            "created_at": datetime.now().isoformat()
+        })
+        st.rerun()
 
 # -------------------------------
-# 지출 내역 (표 형식 + 체크 삭제 + 총액)
+# 지출 내역: 표(테이블) + 체크 삭제 + 총액
 # -------------------------------
 st.subheader("📋 지출 내역")
 
 if st.session_state.expenses:
-    # 최신 날짜 순 정렬
     expenses_sorted = sorted(
         st.session_state.expenses,
         key=lambda x: (x.get("date", ""), x.get("created_at", "")),
         reverse=True
     )
 
-    # DataFrame 변환
-    table_rows = []
+    rows = []
     total_amount = 0
 
     for e in expenses_sorted:
-        total_amount += int(e["amount_krw"])
-        table_rows.append({
+        total_amount += int(e.get("amount_krw", 0))
+        rows.append({
             "삭제": False,
-            "날짜": e["date"],
-            "항목": e["category"],
-            "금액(원)": f"{int(e['amount_krw']):,}",
-            "결제자": e["payer"],
-            "참여자": ", ".join(e["participants"]),
+            "날짜": e.get("date", ""),
+            "항목": e.get("category", ""),
+            "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
+            "결제자": e.get("payer", ""),
+            "참여자": ", ".join(e.get("participants", [])),
         })
 
-    df_table = pd.DataFrame(table_rows)
+    df_table = pd.DataFrame(rows)
 
-    # ✅ 표 + 체크박스
     edited_df = st.data_editor(
         df_table,
         hide_index=True,
         use_container_width=True,
         column_config={
-            "삭제": st.column_config.CheckboxColumn(
-                "삭제",
-                help="삭제할 지출을 선택하세요",
-                default=False,
-            )
-        }
+            "삭제": st.column_config.CheckboxColumn("삭제", default=False),
+        },
+        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자"]
     )
 
-    # 삭제 버튼
-    if st.button("🗑️ 선택 지출 삭제"):
-        keep = []
-        for keep_row, edited_row in zip(expenses_sorted, edited_df.to_dict("records")):
-            if not edited_row["삭제"]:
-                keep.append(keep_row)
-        st.session_state.expenses = keep
-        st.rerun()
+    col_del, col_sum = st.columns([1, 1])
+    with col_del:
+        if st.button("🗑️ 선택 지출 삭제"):
+            keep = []
+            edited_records = edited_df.to_dict("records")
+            for original, edited in zip(expenses_sorted, edited_records):
+                if not edited["삭제"]:
+                    keep.append(original)
+            st.session_state.expenses = keep
+            st.rerun()
 
-    # 총액 표시
-    st.markdown(
-        f"""
-        <div style="text-align:right; font-weight:700; font-size:1.1rem; margin-top:0.5em;">
-        💰 현재까지 총 지출: {total_amount:,} 원
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
+    with col_sum:
+        st.markdown(
+            f"""
+            <div style="text-align:right; font-weight:800; font-size:1.1rem;">
+            💰 현재까지 총 지출: {total_amount:,} 원
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 else:
     st.info("아직 입력된 지출이 없습니다.")
 
@@ -359,7 +433,6 @@ summary_df, transfers_df = compute_settlement(st.session_state.participants, st.
 show_summary = summary_df.copy()
 for col in ["낸 금액", "부담금", "차액(낸-부담)"]:
     show_summary[col] = show_summary[col].apply(lambda x: f"{int(x):,}")
-
 st.dataframe(show_summary, use_container_width=True)
 
 st.subheader("💸 누가 누구에게 보내면 될까요?")
@@ -371,7 +444,7 @@ else:
     st.dataframe(show_trans, use_container_width=True)
 
 # -------------------------------
-# 다운로드
+# 다운로드(엑셀)
 # -------------------------------
 st.subheader("📥 다운로드")
 
@@ -382,6 +455,6 @@ if expenses_df.empty:
 st.download_button(
     "📊 엑셀 다운로드 (지출/정산/송금)",
     data=make_excel(expenses_df, summary_df, transfers_df),
-    file_name=f"{trip_name}.xlsx",
+    file_name=f"{st.session_state.trip_name_ui}.xlsx",
     use_container_width=True
 )
