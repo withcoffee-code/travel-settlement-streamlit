@@ -11,9 +11,9 @@ from collections import defaultdict
 st.set_page_config(page_title="여행 공동경비 정산", layout="wide")
 
 # -------------------------------
-# Session State
+# Session State 초기화
 # -------------------------------
-st.session_state.setdefault("trip_name", "여행_정산")
+st.session_state.setdefault("trip_name_ui", "여행_정산")     # ✅ 위젯 key로만 사용
 st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
 
@@ -26,7 +26,7 @@ def to_json_bytes(data: dict) -> BytesIO:
     buf.seek(0)
     return buf
 
-def safe_load_json(uploaded_file) -> dict:
+def load_trip_from_json(uploaded_file) -> dict:
     return json.load(uploaded_file)
 
 # -------------------------------
@@ -42,13 +42,9 @@ def make_excel(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_df
     return buf
 
 # -------------------------------
-# 정산 계산(정확한 원단위 분배)
+# 정산 계산(원 단위 정확 분배)
 # -------------------------------
 def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
-    """
-    amount를 people에게 원 단위로 정확히 분배.
-    나머지는 people 순서대로 1원씩 더함.
-    """
     n = len(people)
     if n <= 0:
         return {}
@@ -59,27 +55,18 @@ def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
         shares[people[i]] += 1
     return shares
 
-def compute_settlement(participants: list[str], expenses: list[dict]) -> tuple[pd.DataFrame, list[dict], pd.DataFrame]:
-    """
-    return:
-      - summary_df: 이름/낸 금액/부담금/차액
-      - transfers(list of dict): from,to,amount
-      - transfers_df
-    """
-    paid = defaultdict(int)   # 결제자가 낸 돈 합
-    owed = defaultdict(int)   # 각자 부담금 합(정확한 분배)
+def compute_settlement(participants: list[str], expenses: list[dict]):
+    paid = defaultdict(int)
+    owed = defaultdict(int)
 
     for e in expenses:
         amt = int(e.get("amount_krw", 0))
         payer = e.get("payer", "")
         ps = e.get("participants", [])
-        # 방어: 참여자가 비어있으면 분배 불가 -> 스킵
         if not ps:
             continue
 
         paid[payer] += amt
-
-        # 분배는 참여자 리스트 순서대로 나머지 1원 배분(정확)
         shares = split_amount_exact(amt, ps)
         for p, s in shares.items():
             owed[p] += s
@@ -94,15 +81,15 @@ def compute_settlement(participants: list[str], expenses: list[dict]) -> tuple[p
         })
     summary_df = pd.DataFrame(rows)
 
-    # 송금 안내(최소 송금 횟수에 가까운 greedy)
+    # 송금 안내
     senders = []
     receivers = []
     for r in rows:
         diff = r["차액(낸-부담)"]
         if diff < 0:
-            senders.append([r["이름"], -diff])  # 보내야 함
+            senders.append([r["이름"], -diff])
         elif diff > 0:
-            receivers.append([r["이름"], diff]) # 받아야 함
+            receivers.append([r["이름"], diff])
 
     transfers = []
     i = j = 0
@@ -119,7 +106,7 @@ def compute_settlement(participants: list[str], expenses: list[dict]) -> tuple[p
             j += 1
 
     transfers_df = pd.DataFrame(transfers) if transfers else pd.DataFrame(columns=["보내는 사람", "받는 사람", "금액(원)"])
-    return summary_df, transfers, transfers_df
+    return summary_df, transfers_df
 
 # -------------------------------
 # 타이틀(아이폰 한 줄)
@@ -129,38 +116,45 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.text_input("여행 이름", key="trip_name")
-
 # -------------------------------
-# 파일 저장/불러오기 (복구)
+# ✅ 파일 불러오기(중요: 여행 이름 위젯보다 먼저 처리)
 # -------------------------------
 st.subheader("💾 여행 파일 저장/불러오기")
 
 col_f1, col_f2 = st.columns([1, 1])
 
+with col_f2:
+    uploaded = st.file_uploader("📂 여행 파일 불러오기 (JSON)", type=["json"], key="trip_file_uploader")
+    if uploaded is not None:
+        data = load_trip_from_json(uploaded)
+
+        # ✅ 위젯 생성 전에 session_state 값 세팅해야 안전
+        st.session_state["trip_name_ui"] = data.get("trip_name", "불러온_여행")
+        st.session_state["participants"] = data.get("participants", [])
+        st.session_state["expenses"] = data.get("expenses", [])
+
+        st.success("마지막 저장 상태로 복원했습니다. 계속 입력하세요 ✅")
+        st.rerun()
+
+# -------------------------------
+# 여행 이름 (위젯 key는 trip_name_ui)
+# -------------------------------
+st.text_input("여행 이름", key="trip_name_ui")
+trip_name = st.session_state.trip_name_ui  # ✅ 항상 최신 값
+
 with col_f1:
     save_payload = {
-        "trip_name": st.session_state.trip_name,
+        "trip_name": trip_name,
         "participants": st.session_state.participants,
         "expenses": st.session_state.expenses,
     }
     st.download_button(
         "📥 여행 파일 저장 (JSON)",
         data=to_json_bytes(save_payload),
-        file_name=f"{st.session_state.trip_name}.json",
+        file_name=f"{trip_name}.json",   # ✅ 바뀐 이름 그대로 반영
         mime="application/json",
         use_container_width=True
     )
-
-with col_f2:
-    uploaded = st.file_uploader("📂 여행 파일 불러오기 (JSON)", type=["json"])
-    if uploaded is not None:
-        data = safe_load_json(uploaded)
-        st.session_state.trip_name = data.get("trip_name", "불러온_여행")
-        st.session_state.participants = data.get("participants", [])
-        st.session_state.expenses = data.get("expenses", [])
-        st.success("마지막 저장 상태로 복원했습니다. 계속 입력하세요 ✅")
-        st.rerun()
 
 # -------------------------------
 # 참여자
@@ -182,18 +176,15 @@ if st.session_state.participants:
     st.write("현재 참여자:", ", ".join(st.session_state.participants))
 else:
     st.info("참여자를 먼저 추가해 주세요.")
-
-# 참여자가 없으면 아래 입력/정산은 중단(모바일 로딩 안정)
-if not st.session_state.participants:
     st.stop()
 
 # -------------------------------
-# 환율(지금은 간단 버전: 입력 가능)
+# 환율
 # -------------------------------
 st.subheader("💱 환율 (통화 → KRW)")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    rate_KRW = st.number_input("KRW", value=1.0, step=1.0, disabled=True)
+    st.number_input("KRW", value=1.0, step=1.0, disabled=True)
 with c2:
     rate_USD = st.number_input("USD", value=1350.0, step=10.0)
 with c3:
@@ -251,11 +242,10 @@ with st.form("expense_form", clear_on_submit=True):
             st.rerun()
 
 # -------------------------------
-# 지출 내역 (최신 날짜순 + 체크 삭제)
+# 지출 내역 (최신순 + 체크 삭제)
 # -------------------------------
 st.subheader("📋 지출 내역 (최근 날짜 순)")
 
-# 최신순 정렬
 st.session_state.expenses.sort(key=lambda x: (x.get("date", ""), x.get("created_at", "")), reverse=True)
 
 delete_flags = []
@@ -264,13 +254,10 @@ for i, e in enumerate(st.session_state.expenses):
 
     with col1:
         delete_flags.append(st.checkbox("삭제", key=f"del_{i}", label_visibility="collapsed"))
-
     with col2:
         st.write(f"📅 {e['date']} | {e['category']}")
-
     with col3:
         st.write(f"{e['payer']} → {', '.join(e['participants'])}")
-
     with col4:
         st.write(f"{int(e['amount_krw']):,}원")
 
@@ -280,12 +267,11 @@ if any(delete_flags):
         st.rerun()
 
 # -------------------------------
-# 정산 결과(복구: 낸금액/부담금/차액) + 송금 안내
+# 정산 결과 + 송금 안내
 # -------------------------------
 st.subheader("📊 정산 결과")
 
-summary_df, transfers, transfers_df = compute_settlement(st.session_state.participants, st.session_state.expenses)
-
+summary_df, transfers_df = compute_settlement(st.session_state.participants, st.session_state.expenses)
 st.dataframe(summary_df, use_container_width=True)
 
 st.subheader("💸 누가 누구에게 보내면 될까요?")
@@ -295,7 +281,7 @@ else:
     st.dataframe(transfers_df, use_container_width=True)
 
 # -------------------------------
-# 엑셀 다운로드(지출/정산/송금)
+# 엑셀 다운로드
 # -------------------------------
 st.subheader("📥 다운로드")
 
@@ -306,6 +292,6 @@ if expenses_df.empty:
 st.download_button(
     "📊 엑셀 다운로드 (지출/정산/송금)",
     data=make_excel(expenses_df, summary_df, transfers_df),
-    file_name=f"{st.session_state.trip_name}.xlsx",
+    file_name=f"{trip_name}.xlsx",
     use_container_width=True
 )
