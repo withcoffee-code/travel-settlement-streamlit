@@ -37,12 +37,13 @@ st.session_state.setdefault("save_filename_touched", False)
 
 st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
-# ✅ 대신부담/전액부담 UI 상태(위젯 키)
+# ✅ 지출 입력 UI 상태 (폼 밖: 실시간 갱신 영역)
 st.session_state.setdefault("ui_payer_only", False)
 st.session_state.setdefault("ui_payer_not_owed", False)
+st.session_state.setdefault("ui_payer", "")
 st.session_state.setdefault("ui_beneficiary", "")
 
-# ✅ 저장 후 안전 리셋 플래그(위젯 값을 직접 대입하지 않기 위함)
+# ✅ 저장 후 UI 리셋 플래그 (위젯 키를 "렌더 후에" 직접 수정하지 않기 위함)
 st.session_state.setdefault("_reset_expense_ui", False)
 
 # -------------------------------
@@ -72,6 +73,7 @@ st.markdown(
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
       }}
+      /* 소제목 폰트 반으로 줄이기(대략) */
       [data-testid="stMarkdownContainer"] h2 {{
         font-size: 1.05rem !important;
         font-weight: 700 !important;
@@ -151,6 +153,7 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         payer_only = bool(e.get("payer_only", False))
         beneficiary = (e.get("beneficiary") or "").strip()
 
+        # 계산 분배 대상 결정
         if beneficiary:
             split_ps = [beneficiary]      # 대신부담(전액)
         elif payer_only:
@@ -206,10 +209,9 @@ def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
 # -------------------------------
-# ✅ 저장 후 UI 리셋은 "다음 rerun 시작"에서 처리
+# ✅ 저장 후 UI 리셋: "다음 rerun 시작 시" 안전하게 처리
 # -------------------------------
 if st.session_state._reset_expense_ui:
-    # 위젯 생성 전에만 변경하므로 안전
     st.session_state.ui_payer_only = False
     st.session_state.ui_payer_not_owed = False
     st.session_state.ui_beneficiary = ""
@@ -306,6 +308,8 @@ with st.sidebar:
             st.rerun()
 
     if st.session_state.participants:
+.controllers = None
+    if st.session_state.participants:
         st.caption("현재 참여자")
         st.write(", ".join(st.session_state.participants))
     else:
@@ -335,36 +339,60 @@ if not st.session_state.participants:
 rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
+# ✅ 결제자 기본값 보정(참여자 변경/로드 후에도 안전하게)
+if st.session_state.ui_payer not in st.session_state.participants:
+    st.session_state.ui_payer = st.session_state.participants[0]
+
 # -------------------------------
-# ✅ 지출 입력 (실시간 토글 + 저장은 form_submit 1개)
+# ✅ 지출 입력 (실시간 영역 + 저장은 form_submit 1개)
+#   핵심: payer/대신부담/부담자선택은 폼 밖 → 즉시 후보 갱신
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
-t1, t2 = st.columns(2)
-with t1:
+row1a, row1b, row1c = st.columns([1, 1, 1])
+with row1a:
+    st.selectbox("결제자", st.session_state.participants, key="ui_payer")
+with row1b:
     st.checkbox("✅ 결제자가 전액 부담(나만 부담)", key="ui_payer_only")
-with t2:
+with row1c:
     st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="ui_payer_not_owed")
 
-# 동시에 체크 방지(여기도 위젯 키를 직접 바꾸면 위험하므로 "경고만")
+# 충돌 경고(자동 해제는 위젯 렌더 이후 직접 수정 위험이 있어 경고+저장시 검증)
 if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
-    st.warning("전액부담 옵션은 하나만 선택해 주세요. (저장 시 검증됩니다)")
+    st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요. (저장 시 검증됩니다)")
 
-# ✅ 대신부담 선택 UI: 체크하자마자 즉시 보이게 (폼 밖)
-beneficiary_preview = ""
-beneficiary_candidates = []
+# ✅ 대신부담: 체크 즉시 후보가 payer 제외로 갱신됨(이게 이번 문제 해결 포인트)
+beneficiary = ""
 if st.session_state.ui_payer_not_owed:
-    # payer는 폼 안에서 정해지기 때문에, 일단 후보는 전체에서 "나중에 payer 제외"로 확정
-    st.info("아래 폼에서 결제자를 선택하면, 그 사람을 제외한 전액 부담자 후보가 자동으로 정리됩니다.")
+    candidates = [p for p in st.session_state.participants if p != st.session_state.ui_payer]
+    if candidates:
+        # 기존 선택값이 후보에 없으면 첫 후보로 보정 (ui_beneficiary는 위젯 키가 아니라 안전)
+        if st.session_state.ui_beneficiary not in candidates:
+            st.session_state.ui_beneficiary = candidates[0]
 
-# 폼 제출만 저장
+        beneficiary = st.selectbox(
+            "전액 부담자(대신 내는 사람) 선택",
+            candidates,
+            index=candidates.index(st.session_state.ui_beneficiary),
+            key="beneficiary_selectbox_live",
+        )
+        st.session_state.ui_beneficiary = beneficiary
+        st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명</div>', unsafe_allow_html=True)
+    else:
+        st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
+        st.session_state.ui_beneficiary = ""
+else:
+    st.session_state.ui_beneficiary = ""
+
+# -------------------------------
+# ✅ 저장은 form_submit 1개 (자동/중복 저장 재발 방지)
+# -------------------------------
 with st.form("expense_form_clean", clear_on_submit=True):
     a, b, c = st.columns(3)
     with a:
         e_date = st.date_input("날짜", value=date.today())
         category = st.selectbox("항목", categories)
     with b:
-        payer = st.selectbox("결제자", st.session_state.participants)
         currency = st.selectbox("통화", list(rates.keys()))
     with c:
         amount_str = st.text_input("금액 (쉼표 가능)", placeholder="예: 12,000")
@@ -376,25 +404,10 @@ with st.form("expense_form_clean", clear_on_submit=True):
         default=list(st.session_state.participants),
     )
 
-    beneficiary = ""
-    if st.session_state.ui_payer_not_owed:
-        candidates = [p for p in st.session_state.participants if p != payer]
-        if candidates:
-            if st.session_state.ui_beneficiary not in candidates:
-                st.session_state.ui_beneficiary = candidates[0]
-            beneficiary = st.selectbox(
-                "전액 부담자(대신 내는 사람) 선택",
-                candidates,
-                index=candidates.index(st.session_state.ui_beneficiary),
-            )
-            st.session_state.ui_beneficiary = beneficiary
-            st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
-        else:
-            st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
-
     submitted = st.form_submit_button("저장")
 
     if submitted:
+        # 검증
         if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
             st.error("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
             st.stop()
@@ -403,7 +416,7 @@ with st.form("expense_form_clean", clear_on_submit=True):
             st.error("참여자를 최소 1명 이상 선택하세요.")
             st.stop()
 
-        if st.session_state.ui_payer_not_owed and not beneficiary:
+        if st.session_state.ui_payer_not_owed and not st.session_state.ui_beneficiary:
             st.error("대신 부담자를 선택해 주세요.")
             st.stop()
 
@@ -418,20 +431,20 @@ with st.form("expense_form_clean", clear_on_submit=True):
         st.session_state.expenses.append({
             "date": str(e_date),
             "category": category,
-            "payer": payer,
+            "payer": st.session_state.ui_payer,
             "currency": currency,
             "amount": float(amt),
             "amount_krw": amount_krw,
-            "participants": ps_display,
-            "payer_only": bool(st.session_state.ui_payer_only),
-            "beneficiary": beneficiary if st.session_state.ui_payer_not_owed else "",
+            "participants": ps_display,  # 표시용
+            "payer_only": bool(st.session_state.ui_payer_only),  # 계산용
+            "beneficiary": st.session_state.ui_beneficiary if st.session_state.ui_payer_not_owed else "",  # 계산용
             "memo": memo,
             "created_at": datetime.now().isoformat()
         })
 
         queue_toast("지출이 추가되었습니다 ✅")
 
-        # ✅ 저장 후에는 "리셋 플래그"만 세팅 (위젯 키 직접 수정 금지)
+        # 저장 후 UI 토글/부담자 리셋(안전 플래그)
         st.session_state._reset_expense_ui = True
 
         st.rerun()
@@ -540,7 +553,7 @@ if OPENPYXL_OK:
         use_container_width=True
     )
 else:
-    st.warning("현재 서버에 openpyxl이 없어 엑셀 다운로드가 비활성입니다. 대신 CSV ZIP을 내려받을 수 있어요. (Streamlit Cloud에 openpyxl 설치하면 엑셀도 정상 동작)")
+    st.warning("현재 서버에 openpyxl이 없어 엑셀 다운로드가 비활성입니다. 대신 CSV ZIP을 내려받을 수 있어요.")
     st.download_button(
         "📦 CSV ZIP 다운로드 (지출/정산/송금)",
         data=make_csv_zip(expenses_df, summary_df, transfers_df),
