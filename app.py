@@ -41,7 +41,7 @@ st.session_state.setdefault("save_filename_touched", False)
 # 환율
 st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
-# 지출 입력 상태(폼 제거 버전)
+# 지출 입력 상태
 st.session_state.setdefault("exp_date", date.today())
 st.session_state.setdefault("exp_category", "숙박")
 st.session_state.setdefault("exp_payer", None)
@@ -53,8 +53,7 @@ st.session_state.setdefault("exp_payer_only", False)
 st.session_state.setdefault("exp_payer_not_owed", False)
 st.session_state.setdefault("exp_beneficiary", "")
 
-# 저장 트리거(Enter/버튼)
-st.session_state.setdefault("_save_trigger", None)
+st.session_state.setdefault("_last_error", "")
 
 # -------------------------------
 # 토스트 유틸
@@ -266,9 +265,70 @@ def on_save_filename_change():
 if st.session_state.save_filename_ui is None:
     st.session_state.save_filename_ui = st.session_state.trip_name_ui
 
-# 여행 제목이 바뀌었고, 사용자가 파일명을 건드린 적이 없다면 자동으로 따라가게
 if not st.session_state.save_filename_touched:
     st.session_state.save_filename_ui = st.session_state.trip_name_ui
+
+# -------------------------------
+# ✅ 저장 콜백 (중요: 위젯 키 리셋은 반드시 콜백 안에서!)
+# -------------------------------
+def add_expense_from_ui():
+    st.session_state._last_error = ""
+
+    payer = st.session_state.exp_payer
+    payer_only = bool(st.session_state.exp_payer_only)
+    payer_not_owed = bool(st.session_state.exp_payer_not_owed)
+
+    if payer_only and payer_not_owed:
+        st.session_state._last_error = "전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요."
+        return
+
+    ps_display = st.session_state.exp_participants or []
+    if not ps_display:
+        st.session_state._last_error = "참여자를 최소 1명 이상 선택하세요."
+        return
+
+    beneficiary = ""
+    if payer_not_owed:
+        beneficiary = (st.session_state.exp_beneficiary or "").strip()
+        if beneficiary == "":
+            st.session_state._last_error = "대신 부담자를 선택해 주세요."
+            return
+
+    try:
+        amt = parse_amount_text(st.session_state.exp_amount)
+    except ValueError as e:
+        st.session_state._last_error = str(e)
+        return
+
+    amount_krw = int(round(float(amt) * st.session_state.rates[st.session_state.exp_currency]))
+
+    st.session_state.expenses.append({
+        "date": str(st.session_state.exp_date),
+        "category": st.session_state.exp_category,
+        "payer": payer,
+        "currency": st.session_state.exp_currency,
+        "amount": float(amt),
+        "amount_krw": amount_krw,
+        "participants": ps_display,          # 표시용
+        "payer_only": bool(payer_only),      # 계산용
+        "beneficiary": beneficiary,          # 계산용
+        "memo": st.session_state.exp_memo,
+        "created_at": datetime.now().isoformat()
+    })
+
+    # ✅ 여기서만 위젯 키들 안전하게 리셋
+    st.session_state.exp_amount = ""
+    st.session_state.exp_memo = ""
+    st.session_state.exp_payer_only = False
+    st.session_state.exp_payer_not_owed = False
+    st.session_state.exp_beneficiary = ""
+    st.session_state.exp_participants = list(st.session_state.participants)
+
+    queue_toast("지출이 추가되었습니다 ✅")
+
+def on_amount_enter():
+    # 금액 입력 후 Enter(값 변경 확정) 시 저장
+    add_expense_from_ui()
 
 # -------------------------------
 # ✅ 사이드바: 설정
@@ -287,7 +347,6 @@ with st.sidebar:
     )
     st.write("")
 
-    # --- 파일 불러오기/저장 ---
     st.markdown("### 💾 여행 파일")
 
     uploaded = st.file_uploader("여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader_sidebar")
@@ -308,7 +367,6 @@ with st.sidebar:
 
             st.session_state.last_loaded_sig = sig
 
-            # 불러오면(사용자가 파일명 직접 안 건드린 상태면) 저장 파일명도 같이 업데이트되도록
             if not st.session_state.save_filename_touched:
                 st.session_state.save_filename_ui = st.session_state.trip_name_ui
 
@@ -345,7 +403,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 참여자 ---
     st.markdown("### 👥 참여자")
     with st.form("add_participant_sidebar", clear_on_submit=True):
         name = st.text_input("이름 추가", placeholder="예: 엄마, 아빠, 민수")
@@ -367,7 +424,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 환율 ---
     st.markdown("### 💱 환율 (KRW 기준)")
     r_usd = st.number_input("USD", value=float(st.session_state.rates["USD"]), step=10.0, key="rate_usd")
     r_jpy = st.number_input("JPY", value=float(st.session_state.rates["JPY"]), step=0.1, key="rate_jpy")
@@ -393,80 +449,14 @@ if not st.session_state.participants:
 rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
-# 지출 입력 기본값 세팅
+# 지출 입력 기본값 세팅 (위젯 생성 전에!)
 if st.session_state.exp_payer is None:
     st.session_state.exp_payer = st.session_state.participants[0]
 if not st.session_state.exp_participants:
     st.session_state.exp_participants = list(st.session_state.participants)
 
 # -------------------------------
-# 지출 저장 함수 (Enter/버튼 공용)
-# -------------------------------
-def save_expense(trigger: str):
-    # 중복 호출 방지
-    if st.session_state._save_trigger is None:
-        return
-    st.session_state._save_trigger = None
-
-    payer = st.session_state.exp_payer
-    payer_only = bool(st.session_state.exp_payer_only)
-    payer_not_owed = bool(st.session_state.exp_payer_not_owed)
-
-    # 충돌 방지
-    if payer_only and payer_not_owed:
-        st.session_state._last_error = "전액부담 옵션 2개는 동시에 선택할 수 없어요."
-        return
-
-    ps_display = st.session_state.exp_participants or []
-    if not ps_display:
-        st.session_state._last_error = "참여자를 최소 1명 이상 선택하세요."
-        return
-
-    beneficiary = ""
-    if payer_not_owed:
-        beneficiary = (st.session_state.exp_beneficiary or "").strip()
-        if beneficiary == "":
-            st.session_state._last_error = "대신 부담자를 선택해 주세요."
-            return
-
-    try:
-        amt = parse_amount_text(st.session_state.exp_amount)
-    except ValueError as e:
-        st.session_state._last_error = str(e)
-        return
-
-    amount_krw = int(round(float(amt) * rates[st.session_state.exp_currency]))
-
-    st.session_state.expenses.append({
-        "date": str(st.session_state.exp_date),
-        "category": st.session_state.exp_category,
-        "payer": payer,
-        "currency": st.session_state.exp_currency,
-        "amount": float(amt),
-        "amount_krw": amount_krw,
-        "participants": ps_display,          # 표시용
-        "payer_only": bool(payer_only),      # 계산용
-        "beneficiary": beneficiary,          # 계산용
-        "memo": st.session_state.exp_memo,
-        "created_at": datetime.now().isoformat()
-    })
-
-    # 입력값 리셋 (바로 다음 입력 가능)
-    st.session_state.exp_amount = ""
-    st.session_state.exp_memo = ""
-    st.session_state.exp_payer_only = False
-    st.session_state.exp_payer_not_owed = False
-    st.session_state.exp_beneficiary = ""
-    st.session_state.exp_participants = list(st.session_state.participants)
-
-    queue_toast("지출이 추가되었습니다 ✅")
-
-# 금액 입력 Enter 시 저장 트리거
-def on_amount_enter():
-    st.session_state._save_trigger = "enter"
-
-# -------------------------------
-# 지출 입력 UI (form 제거 → 체크 시 즉시 선택창 표시)
+# 지출 입력 UI
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -499,7 +489,7 @@ with col_x1:
 with col_x2:
     st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="exp_payer_not_owed")
 
-# 체크하자마자 바로 아래 선택창 뜨게
+# 체크 즉시 아래 선택창 표시
 if st.session_state.exp_payer_not_owed:
     candidates = [p for p in st.session_state.participants if p != st.session_state.exp_payer]
     if candidates:
@@ -508,18 +498,12 @@ if st.session_state.exp_payer_not_owed:
     else:
         st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
-# 충돌 경고(즉시 표시)
+# 충돌 경고
 if st.session_state.exp_payer_only and st.session_state.exp_payer_not_owed:
     st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
 
-# 버튼 저장
-if st.button("저장"):
-    st.session_state._save_trigger = "button"
-
-# 저장 트리거 처리
-st.session_state.setdefault("_last_error", "")
-if st.session_state._save_trigger in ("enter", "button"):
-    save_expense(st.session_state._save_trigger)
+# 저장 버튼도 콜백으로!
+st.button("저장", on_click=add_expense_from_ui)
 
 if st.session_state._last_error:
     st.error(st.session_state._last_error)
