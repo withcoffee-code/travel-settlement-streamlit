@@ -46,10 +46,7 @@ def flush_toast():
 # -------------------------------
 # UI 스타일
 # -------------------------------
-TONED_ORANGE = "#C97A2B"  # 톤다운 주황
-PINK_TAG_BG = "#F3D6DF"   # 톤다운 핑크 배경
-PINK_TAG_TXT = "#7A2E45"  # 톤다운 핑크 텍스트
-
+TONED_ORANGE = "#C97A2B"
 st.markdown(
     f"""
     <style>
@@ -57,25 +54,12 @@ st.markdown(
         font-size: 1.05rem !important;
         font-weight: 700 !important;
       }}
-
       .main-title {{
         font-size: 28px;
         font-weight: 800;
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
       }}
-
-      .tag-pink {{
-        display:inline-block;
-        padding:2px 8px;
-        border-radius:999px;
-        background:{PINK_TAG_BG};
-        color:{PINK_TAG_TXT};
-        font-weight:700;
-        font-size:0.82rem;
-        line-height:1.3;
-      }}
-
       .hint {{
         font-size:0.85rem;
         color: rgba(0,0,0,0.55);
@@ -139,7 +123,9 @@ def make_excel(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_df
     return buf
 
 # -------------------------------
-# 정산 계산(원 단위 정확 분배) + "결제자 전액 부담" 반영
+# 정산 계산(원 단위 정확 분배)
+# - payer_only: 결제자가 전액 부담
+# - beneficiary: '대신 부담자'가 있으면 그 사람이 전액 부담(예외 케이스)
 # -------------------------------
 def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
     n = len(people)
@@ -161,13 +147,26 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         payer = e.get("payer", "")
         display_ps = e.get("participants", [])
         payer_only = bool(e.get("payer_only", False))
+        beneficiary = (e.get("beneficiary") or "").strip()  # 대신 부담자(있으면 전액부담)
 
-        split_ps = [payer] if payer_only else display_ps
+        # ✅ 분배 대상 결정
+        # 1) beneficiary가 있으면: beneficiary 1명 전액 부담
+        # 2) payer_only면: payer 1명 전액 부담
+        # 3) 아니면: 참여자들 분배
+        if beneficiary:
+            split_ps = [beneficiary]
+        elif payer_only:
+            split_ps = [payer]
+        else:
+            split_ps = display_ps
+
         if not split_ps:
             continue
 
+        # ✅ 누가 먼저 결제했나(낸 돈)
         paid[payer] += amt
 
+        # ✅ 누가 부담하나(정산 분배)
         shares = split_amount_exact(amt, split_ps)
         for p, s in shares.items():
             owed[p] += s
@@ -182,6 +181,7 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         })
     summary_df = pd.DataFrame(rows)
 
+    # 송금 안내
     senders = []
     receivers = []
     for r in rows:
@@ -226,11 +226,10 @@ def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
 # -------------------------------
-# ✅ 사이드바: 설정
+# 사이드바(설정)
 # -------------------------------
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
-
     st.markdown(
         f"""
         <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
@@ -240,7 +239,6 @@ with st.sidebar:
         """,
         unsafe_allow_html=True
     )
-
     st.write("")
 
     st.markdown("### 💾 여행 파일")
@@ -248,7 +246,6 @@ with st.sidebar:
     if uploaded is not None:
         raw = uploaded.getvalue()
         sig = hashlib.sha256(raw).hexdigest()
-
         if st.session_state.last_loaded_sig != sig:
             data = json.loads(raw.decode("utf-8"))
             st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
@@ -257,8 +254,8 @@ with st.sidebar:
             for e in st.session_state.expenses:
                 e.setdefault("created_at", datetime.now().isoformat())
                 e.setdefault("payer_only", False)
+                e.setdefault("beneficiary", "")
             st.session_state.last_loaded_sig = sig
-
             queue_toast("설정이 자동 반영되었습니다 ✅ (여행 파일 불러옴)")
             st.rerun()
 
@@ -267,11 +264,9 @@ with st.sidebar:
 
     st.text_input("저장 파일명 (확장자 제외)", key="save_filename_ui")
 
-    current_save_name = (st.session_state.save_filename_ui or "").strip()
-    if current_save_name == "":
-        current_save_name = st.session_state.trip_name_ui
-
+    current_save_name = (st.session_state.save_filename_ui or "").strip() or st.session_state.trip_name_ui
     same_as_last = (st.session_state.last_saved_filename == current_save_name)
+
     confirm_overwrite = True
     if same_as_last:
         confirm_overwrite = st.checkbox("⚠️ 이전 저장 파일명과 동일합니다. 덮어쓰기(동일 이름 다운로드) 하시겠어요?", value=False)
@@ -330,17 +325,12 @@ with st.sidebar:
 flush_toast()
 
 # -------------------------------
-# 메인 타이틀
+# 메인 타이틀 / 여행 이름
 # -------------------------------
 st.markdown('<div class="main-title">여행 공동경비 정산</div>', unsafe_allow_html=True)
-
-# -------------------------------
-# 여행 이름
-# -------------------------------
 st.subheader("🧳 여행 이름")
 st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
-# 참여자 없으면 안내
 if not st.session_state.participants:
     st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요")
     st.stop()
@@ -349,7 +339,7 @@ rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
-# 지출 입력 + 전액부담 설명 추가
+# 지출 입력 (예외 케이스 포함)
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -373,22 +363,47 @@ with st.form("expense_form", clear_on_submit=True):
         memo = st.text_input("메모(선택)", key="memo_text")
 
     participants_selected = st.multiselect(
-        "참여자 (이 지출에 포함되는 사람)  ※ 전액부담이어도 표시용으로 남습니다",
+        "참여자 (표시용)  ※ 예외/전액부담이어도 표시용으로 남습니다",
         st.session_state.participants,
         default=st.session_state.participants
     )
 
-    payer_only = st.checkbox("✅ 결제자가 전액 부담(나만 부담)", value=False)
+    col_x1, col_x2 = st.columns([1, 1])
 
-    # ✅ 요청하신 작은 설명 표시
-    if payer_only:
-        st.markdown('<div class="hint">정산 분배 대상: 결제자 1명</div>', unsafe_allow_html=True)
+    with col_x1:
+        payer_only = st.checkbox("✅ 결제자가 전액 부담(나만 부담)", value=False)
+
+    with col_x2:
+        # ✅ 예외: 결제자는 부담하지 않고, 다른 사람이 전액 부담
+        payer_not_owed = st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", value=False)
+
+    beneficiary = ""
+    if payer_not_owed:
+        # 결제자 제외한 사람들 중에서 선택 (엄마가 아들 지출을 대신 부담하는 상황)
+        candidates = [p for p in st.session_state.participants if p != payer]
+        if candidates:
+            beneficiary = st.selectbox("전액 부담자(대신 내는 사람) 선택", candidates)
+            st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
+        else:
+            st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
+
+    # 두 옵션 충돌 방지 안내
+    if payer_only and payer_not_owed:
+        st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
 
     save = st.form_submit_button("저장")
 
     if save:
+        if payer_only and payer_not_owed:
+            st.error("전액부담 옵션이 충돌합니다. 하나만 선택해 주세요.")
+            st.stop()
+
         if not participants_selected:
             st.warning("참여자를 최소 1명 이상 선택하세요.")
+            st.stop()
+
+        if payer_not_owed and not beneficiary:
+            st.warning("대신 부담자를 선택해 주세요.")
             st.stop()
 
         try:
@@ -406,15 +421,16 @@ with st.form("expense_form", clear_on_submit=True):
             "currency": currency,
             "amount": float(amt),
             "amount_krw": amount_krw,
-            "participants": participants_selected,
-            "payer_only": bool(payer_only),
+            "participants": participants_selected,  # 표시용
+            "payer_only": bool(payer_only),         # 계산용(결제자 전액부담)
+            "beneficiary": beneficiary,             # 계산용(대신 부담자 전액부담)
             "memo": memo,
             "created_at": datetime.now().isoformat()
         })
         st.rerun()
 
 # -------------------------------
-# 지출 내역 테이블 + 톤다운 핑크 라벨(전액부담)
+# 지출 내역 테이블 (비고에 예외 표시)
 # -------------------------------
 st.subheader("📋 지출 내역")
 
@@ -427,28 +443,23 @@ if st.session_state.expenses:
 
     rows = []
     total_amount = 0
-
     for e in expenses_sorted:
         total_amount += int(e.get("amount_krw", 0))
-        payer_only = bool(e.get("payer_only", False))
 
-        # ✅ 행 배경은 data_editor에서 어렵기 때문에
-        #    '비고'를 핑크 라벨 HTML로 확실히 강조
-        tag = '<span class="tag-pink">전액부담</span>' if payer_only else ""
-
-        # 금액 칸도 라벨 붙여서 더 눈에 띄게
-        amount_cell = f"{int(e.get('amount_krw', 0)):,}원"
-        if payer_only:
-            amount_cell = f"{amount_cell} {tag}"
+        note = ""
+        if e.get("beneficiary"):
+            note = f"대신부담: {e['beneficiary']}"
+        elif e.get("payer_only", False):
+            note = "전액부담"
 
         rows.append({
             "삭제": False,
             "날짜": e.get("date", ""),
             "항목": e.get("category", ""),
-            "금액": amount_cell,  # ✅ 라벨 포함(HTML)
+            "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
             "결제자": e.get("payer", ""),
             "참여자": ", ".join(e.get("participants", [])),
-            "비고": tag,
+            "비고": note,
         })
 
     df_table = pd.DataFrame(rows)
@@ -457,19 +468,9 @@ if st.session_state.expenses:
         df_table,
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "삭제": st.column_config.CheckboxColumn("삭제", default=False),
-            # ✅ HTML을 그대로 보여주기 위해 TextColumn 사용
-            "금액": st.column_config.TextColumn("금액"),
-            "비고": st.column_config.TextColumn("비고"),
-        },
-        disabled=["날짜", "항목", "금액", "결제자", "참여자", "비고"],
+        column_config={"삭제": st.column_config.CheckboxColumn("삭제", default=False)},
+        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자", "비고"]
     )
-
-    # ⚠️ data_editor는 기본적으로 HTML을 렌더링하지 않고 "문자"로 보여줄 수 있습니다.
-    #     (Streamlit 버전에 따라 다름)
-    #     그래서 아래에 '전액부담 표시'를 확실히 보이도록 한 번 더 요약 표시합니다.
-    st.caption("※ 전액부담 건은 ‘비고’에 전액부담 표시가 붙습니다.")
 
     col_del, col_sum = st.columns([1, 1])
     with col_del:
@@ -521,7 +522,10 @@ st.subheader("📥 다운로드")
 
 expenses_df = pd.DataFrame(st.session_state.expenses)
 if expenses_df.empty:
-    expenses_df = pd.DataFrame(columns=["date","category","payer","currency","amount","amount_krw","participants","payer_only","memo","created_at"])
+    expenses_df = pd.DataFrame(columns=[
+        "date","category","payer","currency","amount","amount_krw","participants",
+        "payer_only","beneficiary","memo","created_at"
+    ])
 
 st.download_button(
     "📊 엑셀 다운로드 (지출/정산/송금)",
