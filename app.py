@@ -21,11 +21,13 @@ st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
 st.session_state.setdefault("last_loaded_sig", None)
 
-# 설정 변화 감지용 시그니처
 st.session_state.setdefault("settings_sig", None)
-
-# 토스트 메시지 (rerun 후 띄우기)
 st.session_state.setdefault("toast_msg", None)
+
+st.session_state.setdefault("last_saved_filename", None)
+st.session_state.setdefault("save_filename_ui", None)
+
+st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
 # -------------------------------
 # 토스트 유틸
@@ -42,20 +44,20 @@ def flush_toast():
         st.session_state.toast_msg = None
 
 # -------------------------------
-# UI: 소제목 폰트 50% (bold 유지) + 타이틀 컬러
+# UI 스타일
 # -------------------------------
 TONED_ORANGE = "#C97A2B"  # 톤다운 주황
+PINK_TAG_BG = "#F3D6DF"   # 톤다운 핑크 배경
+PINK_TAG_TXT = "#7A2E45"  # 톤다운 핑크 텍스트
 
 st.markdown(
     f"""
     <style>
-      /* subheader(h2) 크기 줄이기 */
       [data-testid="stMarkdownContainer"] h2 {{
         font-size: 1.05rem !important;
         font-weight: 700 !important;
       }}
 
-      /* 메인 타이틀 톤다운 주황 */
       .main-title {{
         font-size: 28px;
         font-weight: 800;
@@ -63,10 +65,21 @@ st.markdown(
         color: {TONED_ORANGE};
       }}
 
-      /* 메인 레이아웃 약간 정돈 */
-      .tight {{
-        margin-top: 0.25rem;
-        margin-bottom: 0.25rem;
+      .tag-pink {{
+        display:inline-block;
+        padding:2px 8px;
+        border-radius:999px;
+        background:{PINK_TAG_BG};
+        color:{PINK_TAG_TXT};
+        font-weight:700;
+        font-size:0.82rem;
+        line-height:1.3;
+      }}
+
+      .hint {{
+        font-size:0.85rem;
+        color: rgba(0,0,0,0.55);
+        margin-top: 4px;
       }}
     </style>
     """,
@@ -75,8 +88,6 @@ st.markdown(
 
 # -------------------------------
 # (실험적) 사이드바 자동 닫기: 마우스가 사이드바 밖으로 나가면 collapse 클릭
-# - iPhone에서는 mouseleave가 거의 동작하지 않음(마우스가 없기 때문)
-# - Streamlit DOM 변경 시 깨질 수 있음
 # -------------------------------
 components.html(
     """
@@ -86,20 +97,17 @@ components.html(
           const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
           if (!sidebar) return;
 
-          // 중복 리스너 방지
           if (sidebar.dataset.autocloseAttached === "1") return;
           sidebar.dataset.autocloseAttached = "1";
 
           sidebar.addEventListener('mouseleave', function() {
             try {
-              // Streamlit의 사이드바 토글 버튼
               const btn = window.parent.document.querySelector('button[data-testid="collapsedControl"]');
               if (btn) btn.click();
             } catch (e) {}
           });
         }
 
-        // DOM이 늦게 올라오는 경우를 대비해 여러 번 시도
         let tries = 0;
         const timer = setInterval(() => {
           setup();
@@ -131,7 +139,7 @@ def make_excel(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_df
     return buf
 
 # -------------------------------
-# 정산 계산(원 단위 정확 분배)
+# 정산 계산(원 단위 정확 분배) + "결제자 전액 부담" 반영
 # -------------------------------
 def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
     n = len(people)
@@ -151,12 +159,16 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
     for e in expenses:
         amt = int(e.get("amount_krw", 0))
         payer = e.get("payer", "")
-        ps = e.get("participants", [])
-        if not ps:
+        display_ps = e.get("participants", [])
+        payer_only = bool(e.get("payer_only", False))
+
+        split_ps = [payer] if payer_only else display_ps
+        if not split_ps:
             continue
 
         paid[payer] += amt
-        shares = split_amount_exact(amt, ps)
+
+        shares = split_amount_exact(amt, split_ps)
         for p, s in shares.items():
             owed[p] += s
 
@@ -210,14 +222,11 @@ def parse_amount_text(s: str) -> float:
         raise ValueError("금액은 숫자만 입력해 주세요. (예: 12,000 또는 12000)")
     return float(s)
 
-# -------------------------------
-# 총 지출 (KRW) 계산
-# -------------------------------
 def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
 # -------------------------------
-# ✅ 사이드바: 설정(파일/참여자/환율) + 총 지출 요약
+# ✅ 사이드바: 설정
 # -------------------------------
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
@@ -234,11 +243,7 @@ with st.sidebar:
 
     st.write("")
 
-    # ---------------------------
-    # 여행 파일 저장/불러오기
-    # ---------------------------
     st.markdown("### 💾 여행 파일")
-
     uploaded = st.file_uploader("여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader_sidebar")
     if uploaded is not None:
         raw = uploaded.getvalue()
@@ -251,30 +256,48 @@ with st.sidebar:
             st.session_state.expenses = data.get("expenses", [])
             for e in st.session_state.expenses:
                 e.setdefault("created_at", datetime.now().isoformat())
+                e.setdefault("payer_only", False)
             st.session_state.last_loaded_sig = sig
 
             queue_toast("설정이 자동 반영되었습니다 ✅ (여행 파일 불러옴)")
             st.rerun()
 
-    st.download_button(
+    if st.session_state.save_filename_ui is None:
+        st.session_state.save_filename_ui = st.session_state.trip_name_ui
+
+    st.text_input("저장 파일명 (확장자 제외)", key="save_filename_ui")
+
+    current_save_name = (st.session_state.save_filename_ui or "").strip()
+    if current_save_name == "":
+        current_save_name = st.session_state.trip_name_ui
+
+    same_as_last = (st.session_state.last_saved_filename == current_save_name)
+    confirm_overwrite = True
+    if same_as_last:
+        confirm_overwrite = st.checkbox("⚠️ 이전 저장 파일명과 동일합니다. 덮어쓰기(동일 이름 다운로드) 하시겠어요?", value=False)
+
+    can_download = (not same_as_last) or confirm_overwrite
+
+    payload = {
+        "trip_name": st.session_state.trip_name_ui,
+        "participants": st.session_state.participants,
+        "expenses": st.session_state.expenses,
+    }
+
+    if st.download_button(
         "📥 여행 파일 저장 (JSON)",
-        data=to_json_bytes({
-            "trip_name": st.session_state.trip_name_ui,
-            "participants": st.session_state.participants,
-            "expenses": st.session_state.expenses,
-        }),
-        file_name=f"{st.session_state.trip_name_ui}.json",
+        data=to_json_bytes(payload),
+        file_name=f"{current_save_name}.json",
         mime="application/json",
-        use_container_width=True
-    )
+        use_container_width=True,
+        disabled=not can_download
+    ):
+        st.session_state.last_saved_filename = current_save_name
+        queue_toast("저장 파일 다운로드 준비 완료 ✅")
 
     st.divider()
 
-    # ---------------------------
-    # 참여자 관리
-    # ---------------------------
     st.markdown("### 👥 참여자")
-
     with st.form("add_participant_sidebar", clear_on_submit=True):
         name = st.text_input("이름 추가", placeholder="예: 엄마, 아빠, 민수")
         add = st.form_submit_button("추가")
@@ -295,61 +318,29 @@ with st.sidebar:
 
     st.divider()
 
-    # ---------------------------
-    # 환율 설정 (세션에 저장)
-    # ---------------------------
     st.markdown("### 💱 환율 (KRW 기준)")
-
-    st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
-
     r_usd = st.number_input("USD", value=float(st.session_state.rates["USD"]), step=10.0, key="rate_usd")
     r_jpy = st.number_input("JPY", value=float(st.session_state.rates["JPY"]), step=0.1, key="rate_jpy")
     r_eur = st.number_input("EUR", value=float(st.session_state.rates["EUR"]), step=10.0, key="rate_eur")
-
     st.session_state.rates = {"KRW": 1.0, "USD": float(r_usd), "JPY": float(r_jpy), "EUR": float(r_eur)}
 
 # -------------------------------
-# 메인: 토스트 표시(한 번만)
+# 메인: 토스트 표시
 # -------------------------------
 flush_toast()
 
 # -------------------------------
-# 메인 타이틀(톤다운 주황)
+# 메인 타이틀
 # -------------------------------
 st.markdown('<div class="main-title">여행 공동경비 정산</div>', unsafe_allow_html=True)
 
 # -------------------------------
-# 여행 이름 (subheader 레벨 + 아이콘)
+# 여행 이름
 # -------------------------------
 st.subheader("🧳 여행 이름")
-st.text_input(
-    "여행 이름 입력",
-    key="trip_name_ui",
-    label_visibility="collapsed"
-)
+st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
-# 설정 변경 감지(토스트)
-def current_settings_sig() -> str:
-    payload = {
-        "trip_name": st.session_state.trip_name_ui,
-        "participants": st.session_state.participants,
-        "rates": st.session_state.get("rates", {}),
-    }
-    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-sig_now = current_settings_sig()
-if st.session_state.settings_sig is None:
-    st.session_state.settings_sig = sig_now
-else:
-    if sig_now != st.session_state.settings_sig:
-        st.session_state.settings_sig = sig_now
-        try:
-            st.toast("설정이 자동 반영되었습니다 ✅")
-        except Exception:
-            pass
-
-# 참여자 없으면 안내 문구 변경
+# 참여자 없으면 안내
 if not st.session_state.participants:
     st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요")
     st.stop()
@@ -358,7 +349,7 @@ rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
-# 지출 입력 (Enter로 저장 / 쉼표 입력 가능 / 0 없음)
+# 지출 입력 + 전액부담 설명 추가
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -382,10 +373,16 @@ with st.form("expense_form", clear_on_submit=True):
         memo = st.text_input("메모(선택)", key="memo_text")
 
     participants_selected = st.multiselect(
-        "참여자 (이 지출에 포함되는 사람)",
+        "참여자 (이 지출에 포함되는 사람)  ※ 전액부담이어도 표시용으로 남습니다",
         st.session_state.participants,
         default=st.session_state.participants
     )
+
+    payer_only = st.checkbox("✅ 결제자가 전액 부담(나만 부담)", value=False)
+
+    # ✅ 요청하신 작은 설명 표시
+    if payer_only:
+        st.markdown('<div class="hint">정산 분배 대상: 결제자 1명</div>', unsafe_allow_html=True)
 
     save = st.form_submit_button("저장")
 
@@ -410,13 +407,14 @@ with st.form("expense_form", clear_on_submit=True):
             "amount": float(amt),
             "amount_krw": amount_krw,
             "participants": participants_selected,
+            "payer_only": bool(payer_only),
             "memo": memo,
             "created_at": datetime.now().isoformat()
         })
         st.rerun()
 
 # -------------------------------
-# 지출 내역: 표(테이블) + 체크 삭제 + 총액
+# 지출 내역 테이블 + 톤다운 핑크 라벨(전액부담)
 # -------------------------------
 st.subheader("📋 지출 내역")
 
@@ -432,13 +430,25 @@ if st.session_state.expenses:
 
     for e in expenses_sorted:
         total_amount += int(e.get("amount_krw", 0))
+        payer_only = bool(e.get("payer_only", False))
+
+        # ✅ 행 배경은 data_editor에서 어렵기 때문에
+        #    '비고'를 핑크 라벨 HTML로 확실히 강조
+        tag = '<span class="tag-pink">전액부담</span>' if payer_only else ""
+
+        # 금액 칸도 라벨 붙여서 더 눈에 띄게
+        amount_cell = f"{int(e.get('amount_krw', 0)):,}원"
+        if payer_only:
+            amount_cell = f"{amount_cell} {tag}"
+
         rows.append({
             "삭제": False,
             "날짜": e.get("date", ""),
             "항목": e.get("category", ""),
-            "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
+            "금액": amount_cell,  # ✅ 라벨 포함(HTML)
             "결제자": e.get("payer", ""),
             "참여자": ", ".join(e.get("participants", [])),
+            "비고": tag,
         })
 
     df_table = pd.DataFrame(rows)
@@ -449,9 +459,17 @@ if st.session_state.expenses:
         use_container_width=True,
         column_config={
             "삭제": st.column_config.CheckboxColumn("삭제", default=False),
+            # ✅ HTML을 그대로 보여주기 위해 TextColumn 사용
+            "금액": st.column_config.TextColumn("금액"),
+            "비고": st.column_config.TextColumn("비고"),
         },
-        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자"]
+        disabled=["날짜", "항목", "금액", "결제자", "참여자", "비고"],
     )
+
+    # ⚠️ data_editor는 기본적으로 HTML을 렌더링하지 않고 "문자"로 보여줄 수 있습니다.
+    #     (Streamlit 버전에 따라 다름)
+    #     그래서 아래에 '전액부담 표시'를 확실히 보이도록 한 번 더 요약 표시합니다.
+    st.caption("※ 전액부담 건은 ‘비고’에 전액부담 표시가 붙습니다.")
 
     col_del, col_sum = st.columns([1, 1])
     with col_del:
@@ -503,7 +521,7 @@ st.subheader("📥 다운로드")
 
 expenses_df = pd.DataFrame(st.session_state.expenses)
 if expenses_df.empty:
-    expenses_df = pd.DataFrame(columns=["date","category","payer","currency","amount","amount_krw","participants","memo","created_at"])
+    expenses_df = pd.DataFrame(columns=["date","category","payer","currency","amount","amount_krw","participants","payer_only","memo","created_at"])
 
 st.download_button(
     "📊 엑셀 다운로드 (지출/정산/송금)",
