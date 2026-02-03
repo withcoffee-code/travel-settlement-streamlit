@@ -245,6 +245,14 @@ if st.session_state._reset_expense_ui:
     st.session_state.ui_payer_not_owed = False
     st.session_state.ui_beneficiary = ""
     st.session_state.editing_id = None
+    
+    # ✅ 폼 위젯 기본값 초기화 (위젯 생성 전이라 안전)
+    st.session_state.form_date = date.today()
+    st.session_state.form_category = categories[0]
+    st.session_state.form_currency = "KRW"
+    st.session_state.form_amount = ""
+    st.session_state.form_memo = ""
+    st.session_state.form_participants = list(st.session_state.participants)
     st.session_state._reset_expense_ui = False
 
 # -------------------------------
