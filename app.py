@@ -7,6 +7,7 @@ from collections import defaultdict
 import hashlib
 import re
 import zipfile
+import uuid
 
 # -------------------------------
 # Excel 엔진 가용성 체크
@@ -37,14 +38,18 @@ st.session_state.setdefault("save_filename_touched", False)
 
 st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
-# ✅ 지출 입력 UI 상태 (폼 밖: 실시간 갱신 영역)
+# ✅ 지출 입력 UI 상태(폼 밖: 실시간)
 st.session_state.setdefault("ui_payer_only", False)
 st.session_state.setdefault("ui_payer_not_owed", False)
 st.session_state.setdefault("ui_payer", "")
 st.session_state.setdefault("ui_beneficiary", "")
 
-# ✅ 저장 후 UI 리셋 플래그 (위젯 키를 "렌더 후에" 직접 수정하지 않기 위함)
+# ✅ 저장 후 UI 리셋 플래그
 st.session_state.setdefault("_reset_expense_ui", False)
+
+# ✅ 수정(편집) 상태
+st.session_state.setdefault("editing_id", None)          # 수정 중인 expense id
+st.session_state.setdefault("_prefill_form", None)       # 다음 rerun에서 폼 위젯 값 미리 채우기
 
 # -------------------------------
 # 토스트 유틸
@@ -73,7 +78,6 @@ st.markdown(
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
       }}
-      /* 소제목 폰트 반으로 줄이기(대략) */
       [data-testid="stMarkdownContainer"] h2 {{
         font-size: 1.05rem !important;
         font-weight: 700 !important;
@@ -83,6 +87,14 @@ st.markdown(
         color: rgba(0,0,0,0.55);
         margin-top: 4px;
       }}
+      .edit-banner {{
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(201,122,43,0.12);
+        border: 1px solid rgba(201,122,43,0.25);
+        margin-bottom: 10px;
+        font-weight: 700;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -91,6 +103,18 @@ st.markdown(
 # -------------------------------
 # 유틸
 # -------------------------------
+def ensure_expense_ids():
+    """불러온 파일/기존 데이터에 id 없으면 부여"""
+    changed = False
+    for e in st.session_state.expenses:
+        if "id" not in e or not e["id"]:
+            e["id"] = uuid.uuid4().hex
+            changed = True
+        e.setdefault("created_at", datetime.now().isoformat())
+        e.setdefault("payer_only", False)
+        e.setdefault("beneficiary", "")
+    return changed
+
 def to_json_bytes(data: dict) -> BytesIO:
     buf = BytesIO()
     buf.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -153,7 +177,6 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         payer_only = bool(e.get("payer_only", False))
         beneficiary = (e.get("beneficiary") or "").strip()
 
-        # 계산 분배 대상 결정
         if beneficiary:
             split_ps = [beneficiary]      # 대신부담(전액)
         elif payer_only:
@@ -208,6 +231,12 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
 def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
+def find_expense_by_id(exp_id: str):
+    for e in st.session_state.expenses:
+        if e.get("id") == exp_id:
+            return e
+    return None
+
 # -------------------------------
 # ✅ 저장 후 UI 리셋: "다음 rerun 시작 시" 안전하게 처리
 # -------------------------------
@@ -215,7 +244,28 @@ if st.session_state._reset_expense_ui:
     st.session_state.ui_payer_only = False
     st.session_state.ui_payer_not_owed = False
     st.session_state.ui_beneficiary = ""
+    st.session_state.editing_id = None
     st.session_state._reset_expense_ui = False
+
+# -------------------------------
+# ✅ 수정 버튼 눌렀을 때: 다음 rerun에서 폼 위젯 값 프리필
+# (위젯 생성 이후 직접 수정하면 에러나므로, 생성 전에만 설정)
+# -------------------------------
+if st.session_state._prefill_form:
+    p = st.session_state._prefill_form
+    # 폼 위젯 키들
+    st.session_state.form_date = p["date_obj"]
+    st.session_state.form_category = p["category"]
+    st.session_state.form_currency = p["currency"]
+    st.session_state.form_amount = p["amount_str"]
+    st.session_state.form_memo = p["memo"]
+    st.session_state.form_participants = p["participants"]
+    # 폼 밖 위젯들
+    st.session_state.ui_payer = p["payer"]
+    st.session_state.ui_payer_only = p["payer_only"]
+    st.session_state.ui_payer_not_owed = p["payer_not_owed"]
+    st.session_state.ui_beneficiary = p["beneficiary"]
+    st.session_state._prefill_form = None
 
 # -------------------------------
 # 저장 파일명 동기화(사용자 편집 전까지)
@@ -254,10 +304,7 @@ with st.sidebar:
             st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
             st.session_state.participants = data.get("participants", [])
             st.session_state.expenses = data.get("expenses", [])
-            for e in st.session_state.expenses:
-                e.setdefault("created_at", datetime.now().isoformat())
-                e.setdefault("payer_only", False)
-                e.setdefault("beneficiary", "")
+            ensure_expense_ids()
             st.session_state.last_loaded_sig = sig
             if not st.session_state.save_filename_touched:
                 st.session_state.save_filename_ui = st.session_state.trip_name_ui
@@ -334,18 +381,30 @@ if not st.session_state.participants:
     st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요")
     st.stop()
 
+ensure_expense_ids()
+
 rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
-# ✅ 결제자 기본값 보정(참여자 변경/로드 후에도 안전하게)
+# 결제자 기본값 보정
 if st.session_state.ui_payer not in st.session_state.participants:
     st.session_state.ui_payer = st.session_state.participants[0]
 
+# 폼 위젯 키 기본값(편집 프리필 없을 때)
+st.session_state.setdefault("form_date", date.today())
+st.session_state.setdefault("form_category", categories[0])
+st.session_state.setdefault("form_currency", "KRW")
+st.session_state.setdefault("form_amount", "")
+st.session_state.setdefault("form_memo", "")
+st.session_state.setdefault("form_participants", list(st.session_state.participants))
+
 # -------------------------------
-# ✅ 지출 입력 (실시간 영역 + 저장은 form_submit 1개)
-#   핵심: payer/대신부담/부담자선택은 폼 밖 → 즉시 후보 갱신
+# ✅ 지출 입력 (실시간 영역 + 저장/수정은 form_submit 1개)
 # -------------------------------
 st.subheader("🧾 지출 입력")
+
+if st.session_state.editing_id:
+    st.markdown('<div class="edit-banner">✏️ 수정 모드: 아래 내용을 수정한 뒤 “수정 저장”을 누르세요.</div>', unsafe_allow_html=True)
 
 row1a, row1b, row1c = st.columns([1, 1, 1])
 with row1a:
@@ -355,19 +414,15 @@ with row1b:
 with row1c:
     st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="ui_payer_not_owed")
 
-# 충돌 경고(자동 해제는 위젯 렌더 이후 직접 수정 위험이 있어 경고+저장시 검증)
 if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
     st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요. (저장 시 검증됩니다)")
 
-# ✅ 대신부담: 체크 즉시 후보가 payer 제외로 갱신됨(이게 이번 문제 해결 포인트)
-beneficiary = ""
+# 대신부담 후보
 if st.session_state.ui_payer_not_owed:
     candidates = [p for p in st.session_state.participants if p != st.session_state.ui_payer]
     if candidates:
-        # 기존 선택값이 후보에 없으면 첫 후보로 보정 (ui_beneficiary는 위젯 키가 아니라 안전)
         if st.session_state.ui_beneficiary not in candidates:
             st.session_state.ui_beneficiary = candidates[0]
-
         beneficiary = st.selectbox(
             "전액 부담자(대신 내는 사람) 선택",
             candidates,
@@ -382,30 +437,45 @@ if st.session_state.ui_payer_not_owed:
 else:
     st.session_state.ui_beneficiary = ""
 
-# -------------------------------
-# ✅ 저장은 form_submit 1개 (자동/중복 저장 재발 방지)
-# -------------------------------
-with st.form("expense_form_clean", clear_on_submit=True):
+# 폼(저장/수정은 submit 1번)
+with st.form("expense_form_clean", clear_on_submit=False):
     a, b, c = st.columns(3)
     with a:
-        e_date = st.date_input("날짜", value=date.today())
-        category = st.selectbox("항목", categories)
+        e_date = st.date_input("날짜", key="form_date")
+        category = st.selectbox("항목", categories, key="form_category")
     with b:
-        currency = st.selectbox("통화", list(rates.keys()))
+        currency = st.selectbox("통화", list(rates.keys()), key="form_currency")
     with c:
-        amount_str = st.text_input("금액 (쉼표 가능)", placeholder="예: 12,000")
-        memo = st.text_input("메모(선택)")
+        amount_str = st.text_input("금액 (쉼표 가능)", placeholder="예: 12,000", key="form_amount")
+        memo = st.text_input("메모(선택)", key="form_memo")
 
     ps_display = st.multiselect(
         "참여자 (표시용)  ※ 예외/전액부담이어도 표시용으로 남습니다",
         st.session_state.participants,
-        default=list(st.session_state.participants),
+        default=st.session_state.form_participants,
+        key="form_participants",
     )
 
-    submitted = st.form_submit_button("저장")
+    left, right = st.columns([1, 1])
+    with left:
+        submit_label = "수정 저장" if st.session_state.editing_id else "저장"
+        submitted = st.form_submit_button(submit_label)
+    with right:
+        cancel_edit = st.form_submit_button("수정 취소") if st.session_state.editing_id else False
+
+    if cancel_edit:
+        st.session_state.editing_id = None
+        # 폼 값은 새 입력 모드 기본값으로
+        st.session_state.form_date = date.today()
+        st.session_state.form_category = categories[0]
+        st.session_state.form_currency = "KRW"
+        st.session_state.form_amount = ""
+        st.session_state.form_memo = ""
+        st.session_state.form_participants = list(st.session_state.participants)
+        queue_toast("수정 모드를 종료했습니다.")
+        st.rerun()
 
     if submitted:
-        # 검증
         if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
             st.error("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
             st.stop()
@@ -426,29 +496,60 @@ with st.form("expense_form_clean", clear_on_submit=True):
 
         amount_krw = int(round(float(amt) * rates[currency]))
 
-        st.session_state.expenses.append({
-            "date": str(e_date),
-            "category": category,
-            "payer": st.session_state.ui_payer,
-            "currency": currency,
-            "amount": float(amt),
-            "amount_krw": amount_krw,
-            "participants": ps_display,  # 표시용
-            "payer_only": bool(st.session_state.ui_payer_only),  # 계산용
-            "beneficiary": st.session_state.ui_beneficiary if st.session_state.ui_payer_not_owed else "",  # 계산용
-            "memo": memo,
-            "created_at": datetime.now().isoformat()
-        })
+        if st.session_state.editing_id:
+            # ✅ 수정(update)
+            target = find_expense_by_id(st.session_state.editing_id)
+            if not target:
+                st.error("수정할 지출을 찾지 못했습니다. (삭제되었을 수 있어요)")
+                st.session_state.editing_id = None
+                st.stop()
 
-        queue_toast("지출이 추가되었습니다 ✅")
+            target.update({
+                "date": str(e_date),
+                "category": category,
+                "payer": st.session_state.ui_payer,
+                "currency": currency,
+                "amount": float(amt),
+                "amount_krw": amount_krw,
+                "participants": ps_display,
+                "payer_only": bool(st.session_state.ui_payer_only),
+                "beneficiary": st.session_state.ui_beneficiary if st.session_state.ui_payer_not_owed else "",
+                "memo": memo,
+                "updated_at": datetime.now().isoformat(),
+            })
 
-        # 저장 후 UI 토글/부담자 리셋(안전 플래그)
+            queue_toast("지출이 수정되었습니다 ✅")
+        else:
+            # ✅ 신규 추가(append)
+            st.session_state.expenses.append({
+                "id": uuid.uuid4().hex,
+                "date": str(e_date),
+                "category": category,
+                "payer": st.session_state.ui_payer,
+                "currency": currency,
+                "amount": float(amt),
+                "amount_krw": amount_krw,
+                "participants": ps_display,
+                "payer_only": bool(st.session_state.ui_payer_only),
+                "beneficiary": st.session_state.ui_beneficiary if st.session_state.ui_payer_not_owed else "",
+                "memo": memo,
+                "created_at": datetime.now().isoformat(),
+            })
+            queue_toast("지출이 추가되었습니다 ✅")
+
+        # 제출 후 입력값 초기화(안전)
         st.session_state._reset_expense_ui = True
+        st.session_state.form_date = date.today()
+        st.session_state.form_category = categories[0]
+        st.session_state.form_currency = "KRW"
+        st.session_state.form_amount = ""
+        st.session_state.form_memo = ""
+        st.session_state.form_participants = list(st.session_state.participants)
 
         st.rerun()
 
 # -------------------------------
-# 지출 내역 표
+# 지출 내역 표 + 선택 삭제 + 선택 수정
 # -------------------------------
 st.subheader("📋 지출 내역")
 
@@ -460,7 +561,9 @@ if st.session_state.expenses:
     )
 
     rows = []
+    id_order = []
     total_amount = 0
+
     for e in expenses_sorted:
         total_amount += int(e.get("amount_krw", 0))
         note = ""
@@ -470,7 +573,8 @@ if st.session_state.expenses:
             note = "전액부담"
 
         rows.append({
-            "삭제": False,
+            "선택": False,   # 수정용
+            "삭제": False,   # 삭제용
             "날짜": e.get("date", ""),
             "항목": e.get("category", ""),
             "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
@@ -478,6 +582,7 @@ if st.session_state.expenses:
             "참여자": ", ".join(e.get("participants", [])),
             "비고": note,
         })
+        id_order.append(e.get("id"))
 
     df_table = pd.DataFrame(rows)
 
@@ -485,22 +590,62 @@ if st.session_state.expenses:
         df_table,
         hide_index=True,
         use_container_width=True,
-        column_config={"삭제": st.column_config.CheckboxColumn("삭제", default=False)},
+        column_config={
+            "선택": st.column_config.CheckboxColumn("선택", default=False),
+            "삭제": st.column_config.CheckboxColumn("삭제", default=False),
+        },
         disabled=["날짜", "항목", "금액(원)", "결제자", "참여자", "비고"]
     )
 
-    col_del, col_sum = st.columns([1, 1])
-    with col_del:
-        if st.button("🗑️ 선택 지출 삭제"):
-            keep = []
-            edited_records = edited_df.to_dict("records")
-            for original, edited in zip(expenses_sorted, edited_records):
-                if not edited["삭제"]:
-                    keep.append(original)
-            st.session_state.expenses = keep
-            st.rerun()
+    b1, b2, b3 = st.columns([1, 1, 2])
 
-    with col_sum:
+    with b1:
+        if st.button("✏️ 선택 지출 수정"):
+            selected_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("선택")]
+            if len(selected_idx) != 1:
+                st.warning("수정할 지출을 1개만 ‘선택’ 체크해 주세요.")
+            else:
+                exp_id = id_order[selected_idx[0]]
+                e = find_expense_by_id(exp_id)
+                if not e:
+                    st.error("선택한 지출을 찾지 못했습니다.")
+                else:
+                    # 프리필 준비(다음 rerun에서 위젯 생성 전에 세팅)
+                    def safe_date(s):
+                        try:
+                            return datetime.fromisoformat(s).date()
+                        except Exception:
+                            return date.today()
+
+                    st.session_state.editing_id = exp_id
+                    st.session_state._prefill_form = {
+                        "date_obj": safe_date(e.get("date", "")),
+                        "category": e.get("category", categories[0]),
+                        "currency": e.get("currency", "KRW"),
+                        "amount_str": f"{e.get('amount', '')}".strip() if e.get("amount") is not None else "",
+                        "memo": e.get("memo", ""),
+                        "participants": e.get("participants", list(st.session_state.participants)),
+                        "payer": e.get("payer", st.session_state.participants[0]),
+                        "payer_only": bool(e.get("payer_only", False)),
+                        "payer_not_owed": bool(e.get("beneficiary", "")),
+                        "beneficiary": e.get("beneficiary", ""),
+                    }
+                    st.rerun()
+
+    with b2:
+        if st.button("🗑️ 선택 지출 삭제"):
+            delete_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("삭제")]
+            if not delete_idx:
+                st.warning("삭제할 지출을 ‘삭제’ 체크해 주세요.")
+            else:
+                delete_ids = set(id_order[i] for i in delete_idx)
+                st.session_state.expenses = [e for e in st.session_state.expenses if e.get("id") not in delete_ids]
+                # 수정 중이던 항목이 삭제되면 수정모드 해제
+                if st.session_state.editing_id in delete_ids:
+                    st.session_state.editing_id = None
+                st.rerun()
+
+    with b3:
         st.markdown(
             f"""
             <div style="text-align:right; font-weight:800; font-size:1.1rem;">
@@ -539,8 +684,8 @@ st.subheader("📥 다운로드")
 expenses_df = pd.DataFrame(st.session_state.expenses)
 if expenses_df.empty:
     expenses_df = pd.DataFrame(columns=[
-        "date","category","payer","currency","amount","amount_krw","participants",
-        "payer_only","beneficiary","memo","created_at"
+        "id","date","category","payer","currency","amount","amount_krw","participants",
+        "payer_only","beneficiary","memo","created_at","updated_at"
     ])
 
 if OPENPYXL_OK:
