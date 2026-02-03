@@ -4,6 +4,7 @@ from datetime import date, datetime
 from io import BytesIO
 import json
 from collections import defaultdict
+import hashlib
 
 # -------------------------------
 # 기본 설정
@@ -13,12 +14,13 @@ st.set_page_config(page_title="여행 공동경비 정산", layout="wide")
 # -------------------------------
 # Session State 초기화
 # -------------------------------
-st.session_state.setdefault("trip_name_ui", "여행_정산")     # ✅ 위젯 key로만 사용
+st.session_state.setdefault("trip_name_ui", "여행_정산")
 st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
+st.session_state.setdefault("last_loaded_sig", None)
 
 # -------------------------------
-# 유틸: JSON 저장/불러오기
+# 유틸: JSON/Excel
 # -------------------------------
 def to_json_bytes(data: dict) -> BytesIO:
     buf = BytesIO()
@@ -26,12 +28,6 @@ def to_json_bytes(data: dict) -> BytesIO:
     buf.seek(0)
     return buf
 
-def load_trip_from_json(uploaded_file) -> dict:
-    return json.load(uploaded_file)
-
-# -------------------------------
-# 유틸: 엑셀 생성
-# -------------------------------
 def make_excel(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_df: pd.DataFrame) -> BytesIO:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -81,7 +77,6 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         })
     summary_df = pd.DataFrame(rows)
 
-    # 송금 안내
     senders = []
     receivers = []
     for r in rows:
@@ -117,30 +112,38 @@ st.markdown(
 )
 
 # -------------------------------
-# ✅ 파일 불러오기(중요: 여행 이름 위젯보다 먼저 처리)
+# 파일 저장/불러오기 (중요: 로드가 먼저!)
 # -------------------------------
 st.subheader("💾 여행 파일 저장/불러오기")
 
 col_f1, col_f2 = st.columns([1, 1])
 
 with col_f2:
-    uploaded = st.file_uploader("📂 여행 파일 불러오기 (JSON)", type=["json"], key="trip_file_uploader")
+    uploaded = st.file_uploader("📂 여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader")
+
+    # ✅ 업로드된 파일이 있을 때, '한 번만' 상태에 반영
     if uploaded is not None:
-        data = load_trip_from_json(uploaded)
+        raw = uploaded.getvalue()
+        sig = hashlib.sha256(raw).hexdigest()
 
-        # ✅ 위젯 생성 전에 session_state 값 세팅해야 안전
-        st.session_state["trip_name_ui"] = data.get("trip_name", "불러온_여행")
-        st.session_state["participants"] = data.get("participants", [])
-        st.session_state["expenses"] = data.get("expenses", [])
+        if st.session_state.last_loaded_sig != sig:
+            data = json.loads(raw.decode("utf-8"))
 
-        st.success("마지막 저장 상태로 복원했습니다. 계속 입력하세요 ✅")
-        st.rerun()
+            # 파일에 저장된 그대로 복원
+            st.session_state.trip_name_ui = data.get("trip_name", "불러온_여행")
+            st.session_state.participants = data.get("participants", [])
+            st.session_state.expenses = data.get("expenses", [])
 
-# -------------------------------
-# 여행 이름 (위젯 key는 trip_name_ui)
-# -------------------------------
+            # 구버전 파일 호환: created_at 없으면 채워넣기(정렬/삭제 안정)
+            for e in st.session_state.expenses:
+                e.setdefault("created_at", datetime.now().isoformat())
+
+            st.session_state.last_loaded_sig = sig
+            st.success("파일에 저장된 상태로 화면에 복원했습니다 ✅")
+
+# 여행 이름(위젯은 session_state 값으로 자동 표시됨)
 st.text_input("여행 이름", key="trip_name_ui")
-trip_name = st.session_state.trip_name_ui  # ✅ 항상 최신 값
+trip_name = st.session_state.trip_name_ui
 
 with col_f1:
     save_payload = {
@@ -151,7 +154,7 @@ with col_f1:
     st.download_button(
         "📥 여행 파일 저장 (JSON)",
         data=to_json_bytes(save_payload),
-        file_name=f"{trip_name}.json",   # ✅ 바뀐 이름 그대로 반영
+        file_name=f"{trip_name}.json",
         mime="application/json",
         use_container_width=True
     )
