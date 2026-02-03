@@ -20,20 +20,15 @@ st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
 st.session_state.setdefault("last_loaded_sig", None)
 
-# 금액 입력(텍스트) 상태
-st.session_state.setdefault("amount_text", "")
-st.session_state.setdefault("memo_text", "")
-
 # -------------------------------
 # UI: 소제목 폰트 50% (bold 유지)
 # -------------------------------
 st.markdown(
     """
     <style>
-      /* Streamlit subheader 크기 줄이기 (대략 50%) */
       [data-testid="stMarkdownContainer"] h2 {
-        font-size: 1.05rem !important; /* 기본 대비 축소 */
-        font-weight: 700 !important;   /* bold 유지 */
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
       }
     </style>
     """,
@@ -125,26 +120,18 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
     return summary_df, transfers_df
 
 # -------------------------------
-# 금액 입력 파서/포맷터
+# 금액 입력 파서
 # -------------------------------
 def parse_amount_text(s: str) -> float:
-    """
-    "1,234" / "1234" / " 1,234 " 등을 float로 변환.
-    비어있으면 0.
-    """
     if s is None:
         return 0.0
     s = s.strip()
     if s == "":
         return 0.0
     s = s.replace(",", "")
-    # 숫자/소수점만 허용
     if not re.fullmatch(r"\d+(\.\d+)?", s):
         raise ValueError("금액은 숫자만 입력해 주세요. (예: 12,000 또는 12000)")
     return float(s)
-
-def format_int_with_commas(n: int) -> str:
-    return f"{n:,}"
 
 # -------------------------------
 # 타이틀(아이폰 한 줄)
@@ -155,7 +142,7 @@ st.markdown(
 )
 
 # -------------------------------
-# 파일 저장/불러오기 (로드 우선)
+# 파일 저장/불러오기
 # -------------------------------
 st.subheader("💾 여행 파일 저장/불러오기")
 
@@ -175,14 +162,12 @@ with col_f2:
             st.session_state.participants = data.get("participants", [])
             st.session_state.expenses = data.get("expenses", [])
 
-            # 구버전 파일 호환
             for e in st.session_state.expenses:
                 e.setdefault("created_at", datetime.now().isoformat())
 
             st.session_state.last_loaded_sig = sig
             st.success("파일에 저장된 상태로 화면에 복원했습니다 ✅")
 
-# 여행 이름
 st.text_input("여행 이름", key="trip_name_ui")
 trip_name = st.session_state.trip_name_ui
 
@@ -241,8 +226,8 @@ categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", 
 
 # -------------------------------
 # 지출 입력 (Enter로 저장)
-# - 금액: text_input으로 받아서 "0" 없이 바로 입력 UX
-# - 통화가 KRW/USD면 천단위 쉼표 지원(입력/표시)
+# ✅ 수정 핵심: 저장 후 session_state.amount_text/memo_text 직접 변경 제거
+#             clear_on_submit=True가 자동으로 비워줌
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
@@ -258,16 +243,12 @@ with st.form("expense_form", clear_on_submit=True):
         currency = st.selectbox("통화", list(rates.keys()))
 
     with c:
-        # ✅ 금액 입력 UX:
-        # - 기본값을 빈 문자열로 유지
-        # - 사용자가 눌러도 0이 보이지 않게
         amount_str = st.text_input(
             "금액 (Enter로 저장)  ※ KRW/USD는 1,234 입력 가능",
-            value=st.session_state.amount_text,
             placeholder="예: 12,000 또는 12000",
             key="amount_text"
         )
-        memo = st.text_input("메모(선택)", value=st.session_state.memo_text, key="memo_text")
+        memo = st.text_input("메모(선택)", key="memo_text")
 
     participants_selected = st.multiselect(
         "참여자 (이 지출에 포함되는 사람)",
@@ -287,7 +268,6 @@ with st.form("expense_form", clear_on_submit=True):
                 st.error(str(e))
                 st.stop()
 
-            # ✅ KRW 기준 환산
             amount_krw = int(round(float(amt) * rates[currency]))
 
             st.session_state.expenses.append({
@@ -301,16 +281,11 @@ with st.form("expense_form", clear_on_submit=True):
                 "memo": memo,
                 "created_at": datetime.now().isoformat()
             })
-
-            # 저장 후 입력 필드 초기화(블랭크)
-            st.session_state.amount_text = ""
-            st.session_state.memo_text = ""
             st.rerun()
 
 # -------------------------------
 # 지출 내역 (최신순 + 체크 삭제)
-# - 표기: "결제자 : A | 참여자 : A, B, C"
-# - 금액: 천단위 쉼표 표시
+# 표기: 결제자 : A | 참여자 : A, B, C
 # -------------------------------
 st.subheader("📋 지출 내역 (최근 날짜 순)")
 
@@ -327,7 +302,6 @@ for i, e in enumerate(st.session_state.expenses):
         payer_txt = e.get("payer", "")
         ps_txt = ", ".join(e.get("participants", []))
         st.write(f"📅 {e['date']} | {e['category']}  —  결제자 : {payer_txt} | 참여자 : {ps_txt}")
-
         if e.get("memo"):
             st.caption(f"메모: {e['memo']}")
 
@@ -346,7 +320,6 @@ st.subheader("📊 정산 결과")
 
 summary_df, transfers_df = compute_settlement(st.session_state.participants, st.session_state.expenses)
 
-# 보기 좋게 천단위 쉼표로 표시(표는 문자열로)
 show_summary = summary_df.copy()
 for col in ["낸 금액", "부담금", "차액(낸-부담)"]:
     show_summary[col] = show_summary[col].apply(lambda x: f"{int(x):,}")
