@@ -308,8 +308,6 @@ with st.sidebar:
             st.rerun()
 
     if st.session_state.participants:
-.controllers = None
-    if st.session_state.participants:
         st.caption("현재 참여자")
         st.write(", ".join(st.session_state.participants))
     else:
