@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 import hashlib
 import re
+import streamlit.components.v1 as components
 
 # -------------------------------
 # 기본 설정
@@ -37,24 +38,78 @@ def flush_toast():
         try:
             st.toast(st.session_state.toast_msg)
         except Exception:
-            # st.toast가 없는 구버전이면 조용히 무시
             pass
         st.session_state.toast_msg = None
 
 # -------------------------------
-# UI: 소제목 폰트 50% (bold 유지)
+# UI: 소제목 폰트 50% (bold 유지) + 타이틀 컬러
 # -------------------------------
+TONED_ORANGE = "#C97A2B"  # 톤다운 주황
+
 st.markdown(
-    """
+    f"""
     <style>
-      /* Streamlit subheader 크기 줄이기 (대략 50%) */
-      [data-testid="stMarkdownContainer"] h2 {
+      /* subheader(h2) 크기 줄이기 */
+      [data-testid="stMarkdownContainer"] h2 {{
         font-size: 1.05rem !important;
         font-weight: 700 !important;
-      }
+      }}
+
+      /* 메인 타이틀 톤다운 주황 */
+      .main-title {{
+        font-size: 28px;
+        font-weight: 800;
+        margin-bottom: 0.25em;
+        color: {TONED_ORANGE};
+      }}
+
+      /* 메인 레이아웃 약간 정돈 */
+      .tight {{
+        margin-top: 0.25rem;
+        margin-bottom: 0.25rem;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# -------------------------------
+# (실험적) 사이드바 자동 닫기: 마우스가 사이드바 밖으로 나가면 collapse 클릭
+# - iPhone에서는 mouseleave가 거의 동작하지 않음(마우스가 없기 때문)
+# - Streamlit DOM 변경 시 깨질 수 있음
+# -------------------------------
+components.html(
+    """
+    <script>
+      (function() {
+        function setup() {
+          const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+          if (!sidebar) return;
+
+          // 중복 리스너 방지
+          if (sidebar.dataset.autocloseAttached === "1") return;
+          sidebar.dataset.autocloseAttached = "1";
+
+          sidebar.addEventListener('mouseleave', function() {
+            try {
+              // Streamlit의 사이드바 토글 버튼
+              const btn = window.parent.document.querySelector('button[data-testid="collapsedControl"]');
+              if (btn) btn.click();
+            } catch (e) {}
+          });
+        }
+
+        // DOM이 늦게 올라오는 경우를 대비해 여러 번 시도
+        let tries = 0;
+        const timer = setInterval(() => {
+          setup();
+          tries += 1;
+          if (tries > 20) clearInterval(timer);
+        }, 250);
+      })();
+    </script>
+    """,
+    height=0
 )
 
 # -------------------------------
@@ -167,7 +222,6 @@ def total_spent_krw() -> int:
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
 
-    # 3️⃣ 사이드바 총 지출 요약
     st.markdown(
         f"""
         <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
@@ -178,7 +232,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    st.write("")  # 여백
+    st.write("")
 
     # ---------------------------
     # 여행 파일 저장/불러오기
@@ -246,14 +300,12 @@ with st.sidebar:
     # ---------------------------
     st.markdown("### 💱 환율 (KRW 기준)")
 
-    # 환율 기본값/유지
     st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
     r_usd = st.number_input("USD", value=float(st.session_state.rates["USD"]), step=10.0, key="rate_usd")
     r_jpy = st.number_input("JPY", value=float(st.session_state.rates["JPY"]), step=0.1, key="rate_jpy")
     r_eur = st.number_input("EUR", value=float(st.session_state.rates["EUR"]), step=10.0, key="rate_eur")
 
-    # 매 실행마다 세션 환율 갱신
     st.session_state.rates = {"KRW": 1.0, "USD": float(r_usd), "JPY": float(r_jpy), "EUR": float(r_eur)}
 
 # -------------------------------
@@ -262,19 +314,21 @@ with st.sidebar:
 flush_toast()
 
 # -------------------------------
-# 타이틀(아이폰 한 줄)
+# 메인 타이틀(톤다운 주황)
 # -------------------------------
-st.markdown(
-    '<h1 style="font-size:28px; margin-bottom:0.3em; font-weight:800;">✈️ 여행 공동경비 정산</h1>',
-    unsafe_allow_html=True
+st.markdown('<div class="main-title">여행 공동경비 정산</div>', unsafe_allow_html=True)
+
+# -------------------------------
+# 여행 이름 (subheader 레벨 + 아이콘)
+# -------------------------------
+st.subheader("🧳 여행 이름")
+st.text_input(
+    "여행 이름 입력",
+    key="trip_name_ui",
+    label_visibility="collapsed"
 )
 
-# -------------------------------
-# 메인: 여행 이름 + 설정 변경 감지(토스트)
-# -------------------------------
-st.text_input("여행 이름", key="trip_name_ui")
-
-# 설정 시그니처(변경 감지)
+# 설정 변경 감지(토스트)
 def current_settings_sig() -> str:
     payload = {
         "trip_name": st.session_state.trip_name_ui,
@@ -290,15 +344,14 @@ if st.session_state.settings_sig is None:
 else:
     if sig_now != st.session_state.settings_sig:
         st.session_state.settings_sig = sig_now
-        # 2️⃣ 설정 변경 토스트
         try:
             st.toast("설정이 자동 반영되었습니다 ✅")
         except Exception:
             pass
 
-# 참여자 없으면 안내
+# 참여자 없으면 안내 문구 변경
 if not st.session_state.participants:
-    st.info("오른쪽 ⚙️ 설정에서 참여자를 먼저 추가해 주세요.")
+    st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요")
     st.stop()
 
 rates = st.session_state.rates
