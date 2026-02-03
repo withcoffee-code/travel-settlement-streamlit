@@ -319,10 +319,28 @@ rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
-# ✅ 지출 입력: 단일 제출(form)로만 저장
+# ✅ 지출 입력: 저장은 폼 제출 1번 / 대신부담 UI는 실시간(폼 밖)
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
+# 1) 실시간 토글 상태(폼 밖에서 관리)
+st.session_state.setdefault("ui_payer_only", False)
+st.session_state.setdefault("ui_payer_not_owed", False)
+st.session_state.setdefault("ui_beneficiary", "")
+
+# 토글/충돌 처리
+ui_col1, ui_col2 = st.columns(2)
+with ui_col1:
+    st.checkbox("✅ 결제자가 전액 부담(나만 부담)", key="ui_payer_only")
+with ui_col2:
+    st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="ui_payer_not_owed")
+
+# 동시에 체크 못 하게 즉시 보정(이건 저장이 아니라 UI 상태만 정리하는 거라 꼬일 위험 없음)
+if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
+    st.warning("전액부담 옵션은 하나만 선택할 수 있어요. (대신부담을 해제합니다)")
+    st.session_state.ui_payer_not_owed = False
+
+# 2) 폼(저장 트리거는 여기 1개만)
 with st.form("expense_form_clean", clear_on_submit=True):
     a, b, c = st.columns(3)
     with a:
@@ -341,34 +359,38 @@ with st.form("expense_form_clean", clear_on_submit=True):
         default=list(st.session_state.participants),
     )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        payer_only = st.checkbox("✅ 결제자가 전액 부담(나만 부담)")
-    with col2:
-        payer_not_owed = st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)")
-
+    # 3) 대신부담이면 부담자 선택을 폼 안에서도 보여주되, 결정은 폼 밖 상태를 기준으로
     beneficiary = ""
-    if payer_not_owed:
+    if st.session_state.ui_payer_not_owed:
         candidates = [p for p in st.session_state.participants if p != payer]
         if candidates:
-            beneficiary = st.selectbox("전액 부담자(대신 내는 사람) 선택", candidates)
-            st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
+            # 폼 밖에서 유지하던 값이 후보에 없으면 초기화
+            if st.session_state.ui_beneficiary not in candidates:
+                st.session_state.ui_beneficiary = candidates[0]
+            beneficiary = st.selectbox(
+                "전액 부담자(대신 내는 사람) 선택",
+                candidates,
+                index=candidates.index(st.session_state.ui_beneficiary),
+            )
+            # 선택값을 폼 밖 상태로도 동기화
+            st.session_state.ui_beneficiary = beneficiary
+
+            st.markdown(
+                '<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>',
+                unsafe_allow_html=True
+            )
         else:
             st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
     submitted = st.form_submit_button("저장")
 
     if submitted:
-        # 충돌 방지
-        if payer_only and payer_not_owed:
-            st.error("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
-            st.stop()
-
+        # 저장 검증
         if not ps_display:
             st.error("참여자를 최소 1명 이상 선택하세요.")
             st.stop()
 
-        if payer_not_owed and not beneficiary:
+        if st.session_state.ui_payer_not_owed and not beneficiary:
             st.error("대신 부담자를 선택해 주세요.")
             st.stop()
 
@@ -387,15 +409,22 @@ with st.form("expense_form_clean", clear_on_submit=True):
             "currency": currency,
             "amount": float(amt),
             "amount_krw": amount_krw,
-            "participants": ps_display,      # 표시용
-            "payer_only": bool(payer_only),  # 계산용
-            "beneficiary": beneficiary,      # 계산용
+            "participants": ps_display,                         # 표시용
+            "payer_only": bool(st.session_state.ui_payer_only), # 계산용
+            "beneficiary": beneficiary if st.session_state.ui_payer_not_owed else "",  # 계산용
             "memo": memo,
             "created_at": datetime.now().isoformat()
         })
 
         queue_toast("지출이 추가되었습니다 ✅")
+
+        # ✅ 제출 후에는 토글만 초기화 (폼 입력값은 clear_on_submit로 자동 초기화)
+        st.session_state.ui_payer_only = False
+        st.session_state.ui_payer_not_owed = False
+        st.session_state.ui_beneficiary = ""
+
         st.rerun()
+
 
 # -------------------------------
 # 지출 내역 표
