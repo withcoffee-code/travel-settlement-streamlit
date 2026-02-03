@@ -37,6 +37,14 @@ st.session_state.setdefault("save_filename_touched", False)
 
 st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
 
+# ✅ 대신부담/전액부담 UI 상태(위젯 키)
+st.session_state.setdefault("ui_payer_only", False)
+st.session_state.setdefault("ui_payer_not_owed", False)
+st.session_state.setdefault("ui_beneficiary", "")
+
+# ✅ 저장 후 안전 리셋 플래그(위젯 값을 직접 대입하지 않기 위함)
+st.session_state.setdefault("_reset_expense_ui", False)
+
 # -------------------------------
 # 토스트 유틸
 # -------------------------------
@@ -144,17 +152,16 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         beneficiary = (e.get("beneficiary") or "").strip()
 
         if beneficiary:
-            split_ps = [beneficiary]                 # 대신부담(전액)
+            split_ps = [beneficiary]      # 대신부담(전액)
         elif payer_only:
-            split_ps = [payer]                       # 결제자 전액부담
+            split_ps = [payer]            # 결제자 전액부담
         else:
-            split_ps = display_ps                    # 일반 n분의1
+            split_ps = display_ps         # 일반 n분의1
 
         if not split_ps:
             continue
 
         paid[payer] += amt
-
         shares = split_amount_exact(amt, split_ps)
         for p, s in shares.items():
             owed[p] += s
@@ -197,6 +204,16 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
 
 def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
+
+# -------------------------------
+# ✅ 저장 후 UI 리셋은 "다음 rerun 시작"에서 처리
+# -------------------------------
+if st.session_state._reset_expense_ui:
+    # 위젯 생성 전에만 변경하므로 안전
+    st.session_state.ui_payer_only = False
+    st.session_state.ui_payer_not_owed = False
+    st.session_state.ui_beneficiary = ""
+    st.session_state._reset_expense_ui = False
 
 # -------------------------------
 # 저장 파일명 동기화(사용자 편집 전까지)
@@ -319,28 +336,28 @@ rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
-# ✅ 지출 입력: 저장은 폼 제출 1번 / 대신부담 UI는 실시간(폼 밖)
+# ✅ 지출 입력 (실시간 토글 + 저장은 form_submit 1개)
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
-# 1) 실시간 토글 상태(폼 밖에서 관리)
-st.session_state.setdefault("ui_payer_only", False)
-st.session_state.setdefault("ui_payer_not_owed", False)
-st.session_state.setdefault("ui_beneficiary", "")
-
-# 토글/충돌 처리
-ui_col1, ui_col2 = st.columns(2)
-with ui_col1:
+t1, t2 = st.columns(2)
+with t1:
     st.checkbox("✅ 결제자가 전액 부담(나만 부담)", key="ui_payer_only")
-with ui_col2:
+with t2:
     st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="ui_payer_not_owed")
 
-# 동시에 체크 못 하게 즉시 보정(이건 저장이 아니라 UI 상태만 정리하는 거라 꼬일 위험 없음)
+# 동시에 체크 방지(여기도 위젯 키를 직접 바꾸면 위험하므로 "경고만")
 if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
-    st.warning("전액부담 옵션은 하나만 선택할 수 있어요. (대신부담을 해제합니다)")
-    st.session_state.ui_payer_not_owed = False
+    st.warning("전액부담 옵션은 하나만 선택해 주세요. (저장 시 검증됩니다)")
 
-# 2) 폼(저장 트리거는 여기 1개만)
+# ✅ 대신부담 선택 UI: 체크하자마자 즉시 보이게 (폼 밖)
+beneficiary_preview = ""
+beneficiary_candidates = []
+if st.session_state.ui_payer_not_owed:
+    # payer는 폼 안에서 정해지기 때문에, 일단 후보는 전체에서 "나중에 payer 제외"로 확정
+    st.info("아래 폼에서 결제자를 선택하면, 그 사람을 제외한 전액 부담자 후보가 자동으로 정리됩니다.")
+
+# 폼 제출만 저장
 with st.form("expense_form_clean", clear_on_submit=True):
     a, b, c = st.columns(3)
     with a:
@@ -359,12 +376,10 @@ with st.form("expense_form_clean", clear_on_submit=True):
         default=list(st.session_state.participants),
     )
 
-    # 3) 대신부담이면 부담자 선택을 폼 안에서도 보여주되, 결정은 폼 밖 상태를 기준으로
     beneficiary = ""
     if st.session_state.ui_payer_not_owed:
         candidates = [p for p in st.session_state.participants if p != payer]
         if candidates:
-            # 폼 밖에서 유지하던 값이 후보에 없으면 초기화
             if st.session_state.ui_beneficiary not in candidates:
                 st.session_state.ui_beneficiary = candidates[0]
             beneficiary = st.selectbox(
@@ -372,20 +387,18 @@ with st.form("expense_form_clean", clear_on_submit=True):
                 candidates,
                 index=candidates.index(st.session_state.ui_beneficiary),
             )
-            # 선택값을 폼 밖 상태로도 동기화
             st.session_state.ui_beneficiary = beneficiary
-
-            st.markdown(
-                '<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
         else:
             st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
     submitted = st.form_submit_button("저장")
 
     if submitted:
-        # 저장 검증
+        if st.session_state.ui_payer_only and st.session_state.ui_payer_not_owed:
+            st.error("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
+            st.stop()
+
         if not ps_display:
             st.error("참여자를 최소 1명 이상 선택하세요.")
             st.stop()
@@ -409,22 +422,19 @@ with st.form("expense_form_clean", clear_on_submit=True):
             "currency": currency,
             "amount": float(amt),
             "amount_krw": amount_krw,
-            "participants": ps_display,                         # 표시용
-            "payer_only": bool(st.session_state.ui_payer_only), # 계산용
-            "beneficiary": beneficiary if st.session_state.ui_payer_not_owed else "",  # 계산용
+            "participants": ps_display,
+            "payer_only": bool(st.session_state.ui_payer_only),
+            "beneficiary": beneficiary if st.session_state.ui_payer_not_owed else "",
             "memo": memo,
             "created_at": datetime.now().isoformat()
         })
 
         queue_toast("지출이 추가되었습니다 ✅")
 
-        # ✅ 제출 후에는 토글만 초기화 (폼 입력값은 clear_on_submit로 자동 초기화)
-        st.session_state.ui_payer_only = False
-        st.session_state.ui_payer_not_owed = False
-        st.session_state.ui_beneficiary = ""
+        # ✅ 저장 후에는 "리셋 플래그"만 세팅 (위젯 키 직접 수정 금지)
+        st.session_state._reset_expense_ui = True
 
         st.rerun()
-
 
 # -------------------------------
 # 지출 내역 표
