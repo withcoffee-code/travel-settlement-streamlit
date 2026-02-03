@@ -26,7 +26,7 @@ def save_json(data):
 
 def make_excel(expenses, summary_df):
     buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         pd.DataFrame(expenses).to_excel(writer, index=False, sheet_name="지출내역")
         summary_df.to_excel(writer, index=False, sheet_name="정산결과")
     buf.seek(0)
@@ -43,14 +43,13 @@ st.session_state.trip_name = st.text_input("여행 이름", st.session_state.tri
 # --------------------------------------------------
 st.subheader("👥 여행 참여자")
 
-col_p1, col_p2 = st.columns([3,1])
+col_p1, col_p2 = st.columns([3, 1])
 with col_p1:
     new_name = st.text_input("이름 입력 후 Enter", key="new_participant")
 with col_p2:
     if st.button("추가") and new_name:
         if new_name not in st.session_state.participants:
             st.session_state.participants.append(new_name)
-            st.session_state.new_participant = ""
             st.rerun()
 
 if st.session_state.participants:
@@ -68,71 +67,74 @@ rates = {
 }
 
 # --------------------------------------------------
-# 지출 입력 / 수정
+# 지출 입력
 # --------------------------------------------------
 st.subheader("🧾 지출 입력")
 
-editing = st.session_state.edit_index
-base = st.session_state.expenses[editing] if editing is not None else {}
+if not st.session_state.participants:
+    st.warning("먼저 여행 참여자를 추가해 주세요.")
+else:
+    editing = st.session_state.edit_index
+    base = st.session_state.expenses[editing] if editing is not None else {}
 
-col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
 
-with col1:
-    e_date = st.date_input(
-        "날짜",
-        value=date.fromisoformat(base.get("date", str(date.today())))
-    )
-    category = st.selectbox(
-        "항목",
-        ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"],
-        index=["숙박","식사","카페","교통","쇼핑","액티비티","기타"].index(
-            base.get("category", "숙박")
+    with col1:
+        e_date = st.date_input(
+            "날짜",
+            value=date.fromisoformat(base.get("date", str(date.today())))
         )
-    )
+        category = st.selectbox(
+            "항목",
+            ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"],
+            index=["숙박","식사","카페","교통","쇼핑","액티비티","기타"].index(
+                base.get("category", "숙박")
+            )
+        )
 
-with col2:
-    payer = st.selectbox(
-        "결제자",
+    with col2:
+        payer = st.selectbox(
+            "결제자",
+            st.session_state.participants,
+            index=st.session_state.participants.index(base["payer"])
+            if editing is not None and base.get("payer") in st.session_state.participants else 0
+        )
+        currency = st.selectbox("통화", list(rates.keys()))
+
+    with col3:
+        amount = st.number_input(
+            "금액",
+            min_value=0,
+            value=int(base.get("amount", 0))
+        )
+        memo = st.text_input("메모", base.get("memo", ""))
+
+    participants_selected = st.multiselect(
+        "참여자 (이 지출에 포함되는 사람)",
         st.session_state.participants,
-        index=st.session_state.participants.index(base["payer"])
-        if editing is not None and base.get("payer") in st.session_state.participants else 0
+        default=base.get("participants", st.session_state.participants)
     )
-    currency = st.selectbox("통화", list(rates.keys()))
 
-with col3:
-    amount = st.number_input(
-        "금액",
-        min_value=0,
-        value=int(base.get("amount", 0))
-    )
-    memo = st.text_input("메모", base.get("memo", ""))
-
-participants_selected = st.multiselect(
-    "참여자 (이 지출에 포함되는 사람)",
-    st.session_state.participants,
-    default=base.get("participants", st.session_state.participants)
-)
-
-if st.button("저장"):
-    data = {
-        "date": str(e_date),
-        "category": category,
-        "payer": payer,
-        "currency": currency,
-        "amount": amount,
-        "amount_krw": int(amount * rates[currency]),
-        "participants": participants_selected,
-        "memo": memo
-    }
-    if editing is None:
-        st.session_state.expenses.append(data)
-    else:
-        st.session_state.expenses[editing] = data
-        st.session_state.edit_index = None
-    st.rerun()
+    if st.button("저장"):
+        data = {
+            "date": str(e_date),
+            "category": category,
+            "payer": payer,
+            "currency": currency,
+            "amount": amount,
+            "amount_krw": int(amount * rates[currency]),
+            "participants": participants_selected,
+            "memo": memo
+        }
+        if editing is None:
+            st.session_state.expenses.append(data)
+        else:
+            st.session_state.expenses[editing] = data
+            st.session_state.edit_index = None
+        st.rerun()
 
 # --------------------------------------------------
-# 지출 내역 리스트
+# 지출 내역
 # --------------------------------------------------
 st.subheader("📋 지출 내역")
 
@@ -149,7 +151,7 @@ else:
             st.rerun()
 
 # --------------------------------------------------
-# 정산 계산
+# 정산 결과
 # --------------------------------------------------
 st.subheader("📊 정산 결과")
 
@@ -196,16 +198,6 @@ else:
             i += 1
         if receivers[j][1] == 0:
             j += 1
-
-# --------------------------------------------------
-# 항목별 차트
-# --------------------------------------------------
-st.subheader("📈 항목별 지출 합계")
-
-df_exp = pd.DataFrame(st.session_state.expenses)
-if not df_exp.empty:
-    chart = df_exp.groupby("category")["amount_krw"].sum()
-    st.bar_chart(chart)
 
 # --------------------------------------------------
 # 저장 / 불러오기 / 엑셀
