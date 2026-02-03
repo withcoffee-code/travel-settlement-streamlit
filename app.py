@@ -6,9 +6,7 @@ import json
 from collections import defaultdict
 import hashlib
 import re
-import streamlit.components.v1 as components
 import zipfile
-import time
 
 # -------------------------------
 # Excel 엔진 가용성 체크
@@ -31,34 +29,13 @@ st.session_state.setdefault("trip_name_ui", "여행_정산")
 st.session_state.setdefault("participants", [])
 st.session_state.setdefault("expenses", [])
 st.session_state.setdefault("last_loaded_sig", None)
-
 st.session_state.setdefault("toast_msg", None)
 
-# 저장 파일명 제어
 st.session_state.setdefault("last_saved_filename", None)
 st.session_state.setdefault("save_filename_ui", None)
 st.session_state.setdefault("save_filename_touched", False)
 
-# 환율
 st.session_state.setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
-
-# 지출 입력 상태
-st.session_state.setdefault("exp_date", date.today())
-st.session_state.setdefault("exp_category", "숙박")
-st.session_state.setdefault("exp_payer", None)
-st.session_state.setdefault("exp_currency", "KRW")
-st.session_state.setdefault("exp_amount", "")
-st.session_state.setdefault("exp_memo", "")
-st.session_state.setdefault("exp_participants", [])
-st.session_state.setdefault("exp_payer_only", False)
-st.session_state.setdefault("exp_payer_not_owed", False)
-st.session_state.setdefault("exp_beneficiary", "")
-
-st.session_state.setdefault("_last_error", "")
-
-# ✅ 중복 저장 방지용 락/타임스탬프
-st.session_state.setdefault("_save_lock", False)
-st.session_state.setdefault("_last_save_ts", 0.0)
 
 # -------------------------------
 # 토스트 유틸
@@ -75,22 +52,21 @@ def flush_toast():
         st.session_state.toast_msg = None
 
 # -------------------------------
-# UI 스타일
+# 스타일
 # -------------------------------
 TONED_ORANGE = "#C97A2B"
-
 st.markdown(
     f"""
     <style>
-      [data-testid="stMarkdownContainer"] h2 {{
-        font-size: 1.05rem !important;
-        font-weight: 700 !important;
-      }}
       .main-title {{
         font-size: 28px;
         font-weight: 800;
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
+      }}
+      [data-testid="stMarkdownContainer"] h2 {{
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
       }}
       .hint {{
         font-size:0.85rem;
@@ -103,41 +79,7 @@ st.markdown(
 )
 
 # -------------------------------
-# (실험적) 사이드바 자동 닫기: PC 마우스 기준
-# -------------------------------
-components.html(
-    """
-    <script>
-      (function() {
-        function setup() {
-          const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
-          if (!sidebar) return;
-
-          if (sidebar.dataset.autocloseAttached === "1") return;
-          sidebar.dataset.autocloseAttached = "1";
-
-          sidebar.addEventListener('mouseleave', function() {
-            try {
-              const btn = window.parent.document.querySelector('button[data-testid="collapsedControl"]');
-              if (btn) btn.click();
-            } catch (e) {}
-          });
-        }
-
-        let tries = 0;
-        const timer = setInterval(() => {
-          setup();
-          tries += 1;
-          if (tries > 20) clearInterval(timer);
-        }, 250);
-      })();
-    </script>
-    """,
-    height=0
-)
-
-# -------------------------------
-# 유틸: JSON/Excel/CSV ZIP
+# 유틸
 # -------------------------------
 def to_json_bytes(data: dict) -> BytesIO:
     buf = BytesIO()
@@ -165,9 +107,20 @@ def make_csv_zip(expenses_df: pd.DataFrame, summary_df: pd.DataFrame, transfers_
     buf.seek(0)
     return buf
 
-# -------------------------------
-# 정산 계산(원 단위 정확 분배)
-# -------------------------------
+def parse_amount_text(s: str) -> float:
+    if s is None:
+        raise ValueError("금액을 입력해 주세요.")
+    s = s.strip()
+    if s == "":
+        raise ValueError("금액을 입력해 주세요.")
+    s = s.replace(",", "")
+    if not re.fullmatch(r"\d+(\.\d+)?", s):
+        raise ValueError("금액은 숫자만 입력해 주세요. (예: 12,000 또는 12000)")
+    v = float(s)
+    if v <= 0:
+        raise ValueError("금액은 0보다 커야 합니다.")
+    return v
+
 def split_amount_exact(amount: int, people: list[str]) -> dict[str, int]:
     n = len(people)
     if n <= 0:
@@ -191,11 +144,11 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
         beneficiary = (e.get("beneficiary") or "").strip()
 
         if beneficiary:
-            split_ps = [beneficiary]
+            split_ps = [beneficiary]                 # 대신부담(전액)
         elif payer_only:
-            split_ps = [payer]
+            split_ps = [payer]                       # 결제자 전액부담
         else:
-            split_ps = display_ps
+            split_ps = display_ps                    # 일반 n분의1
 
         if not split_ps:
             continue
@@ -242,119 +195,19 @@ def compute_settlement(participants: list[str], expenses: list[dict]):
     transfers_df = pd.DataFrame(transfers) if transfers else pd.DataFrame(columns=["보내는 사람", "받는 사람", "금액(원)"])
     return summary_df, transfers_df
 
-# -------------------------------
-# 금액 입력 파서 (쉼표 허용)
-# -------------------------------
-def parse_amount_text(s: str) -> float:
-    if s is None:
-        return 0.0
-    s = s.strip()
-    if s == "":
-        raise ValueError("금액을 입력해 주세요.")
-    s = s.replace(",", "")
-    if not re.fullmatch(r"\d+(\.\d+)?", s):
-        raise ValueError("금액은 숫자만 입력해 주세요. (예: 12,000 또는 12000)")
-    return float(s)
-
 def total_spent_krw() -> int:
     return int(sum(int(e.get("amount_krw", 0)) for e in st.session_state.expenses))
 
 # -------------------------------
-# 저장 파일명 자동 동기화
+# 저장 파일명 동기화(사용자 편집 전까지)
 # -------------------------------
 def on_save_filename_change():
     st.session_state.save_filename_touched = True
 
 if st.session_state.save_filename_ui is None:
     st.session_state.save_filename_ui = st.session_state.trip_name_ui
-
 if not st.session_state.save_filename_touched:
     st.session_state.save_filename_ui = st.session_state.trip_name_ui
-
-# -------------------------------
-# ✅ 중복 저장 방지 포함: 저장 콜백
-# -------------------------------
-def add_expense_from_ui(source: str):
-    # 1) 락: 저장 중이면 무시
-    if st.session_state._save_lock:
-        return
-
-    now = time.time()
-
-    # 2) 아주 짧은 시간(0.5초) 내 중복 호출 방지
-    #    Enter 저장 직후 버튼이 또 들어오는 케이스 방지
-    if now - st.session_state._last_save_ts < 0.5:
-        return
-
-    st.session_state._save_lock = True
-    try:
-        st.session_state._last_error = ""
-
-        payer = st.session_state.exp_payer
-        payer_only = bool(st.session_state.exp_payer_only)
-        payer_not_owed = bool(st.session_state.exp_payer_not_owed)
-
-        if payer_only and payer_not_owed:
-            st.session_state._last_error = "전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요."
-            return
-
-        ps_display = st.session_state.exp_participants or []
-        if not ps_display:
-            st.session_state._last_error = "참여자를 최소 1명 이상 선택하세요."
-            return
-
-        beneficiary = ""
-        if payer_not_owed:
-            beneficiary = (st.session_state.exp_beneficiary or "").strip()
-            if beneficiary == "":
-                st.session_state._last_error = "대신 부담자를 선택해 주세요."
-                return
-
-        # 3) 금액 비어있거나 0 저장 방지
-        try:
-            amt = parse_amount_text(st.session_state.exp_amount)
-        except ValueError as e:
-            st.session_state._last_error = str(e)
-            return
-
-        if amt <= 0:
-            st.session_state._last_error = "금액은 0보다 커야 합니다."
-            return
-
-        amount_krw = int(round(float(amt) * st.session_state.rates[st.session_state.exp_currency]))
-
-        st.session_state.expenses.append({
-            "date": str(st.session_state.exp_date),
-            "category": st.session_state.exp_category,
-            "payer": payer,
-            "currency": st.session_state.exp_currency,
-            "amount": float(amt),
-            "amount_krw": amount_krw,
-            "participants": ps_display,
-            "payer_only": bool(payer_only),
-            "beneficiary": beneficiary,
-            "memo": st.session_state.exp_memo,
-            "created_at": datetime.now().isoformat()
-        })
-
-        # ✅ 리셋(콜백 안에서만)
-        st.session_state.exp_amount = ""
-        st.session_state.exp_memo = ""
-        st.session_state.exp_payer_only = False
-        st.session_state.exp_payer_not_owed = False
-        st.session_state.exp_beneficiary = ""
-        st.session_state.exp_participants = list(st.session_state.participants)
-
-        st.session_state._last_save_ts = now
-        queue_toast("지출이 추가되었습니다 ✅")
-    finally:
-        st.session_state._save_lock = False
-
-def on_amount_enter():
-    add_expense_from_ui("enter")
-
-def on_save_button():
-    add_expense_from_ui("button")
 
 # -------------------------------
 # 사이드바
@@ -453,7 +306,6 @@ with st.sidebar:
 # 메인
 # -------------------------------
 flush_toast()
-
 st.markdown('<div class="main-title">여행 공동경비 정산</div>', unsafe_allow_html=True)
 
 st.subheader("🧳 여행 이름")
@@ -466,64 +318,87 @@ if not st.session_state.participants:
 rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
-if st.session_state.exp_payer is None:
-    st.session_state.exp_payer = st.session_state.participants[0]
-if not st.session_state.exp_participants:
-    st.session_state.exp_participants = list(st.session_state.participants)
-
 # -------------------------------
-# 지출 입력
+# ✅ 지출 입력: 단일 제출(form)로만 저장
 # -------------------------------
 st.subheader("🧾 지출 입력")
 
-a, b, c = st.columns(3)
-with a:
-    st.date_input("날짜", key="exp_date")
-    st.selectbox("항목", categories, key="exp_category")
-with b:
-    st.selectbox("결제자", st.session_state.participants, key="exp_payer")
-    st.selectbox("통화", list(rates.keys()), key="exp_currency")
-with c:
-    st.text_input(
-        "금액 (Enter로 저장)  ※ 1,234 입력 가능",
-        placeholder="예: 12,000 또는 12000",
-        key="exp_amount",
-        on_change=on_amount_enter
+with st.form("expense_form_clean", clear_on_submit=True):
+    a, b, c = st.columns(3)
+    with a:
+        e_date = st.date_input("날짜", value=date.today())
+        category = st.selectbox("항목", categories)
+    with b:
+        payer = st.selectbox("결제자", st.session_state.participants)
+        currency = st.selectbox("통화", list(rates.keys()))
+    with c:
+        amount_str = st.text_input("금액 (쉼표 가능)", placeholder="예: 12,000")
+        memo = st.text_input("메모(선택)")
+
+    ps_display = st.multiselect(
+        "참여자 (표시용)  ※ 예외/전액부담이어도 표시용으로 남습니다",
+        st.session_state.participants,
+        default=list(st.session_state.participants),
     )
-    st.text_input("메모(선택)", key="exp_memo")
 
-st.multiselect(
-    "참여자 (표시용)  ※ 예외/전액부담이어도 표시용으로 남습니다",
-    st.session_state.participants,
-    key="exp_participants",
-    default=list(st.session_state.participants)
-)
+    col1, col2 = st.columns(2)
+    with col1:
+        payer_only = st.checkbox("✅ 결제자가 전액 부담(나만 부담)")
+    with col2:
+        payer_not_owed = st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)")
 
-col_x1, col_x2 = st.columns([1, 1])
-with col_x1:
-    st.checkbox("✅ 결제자가 전액 부담(나만 부담)", key="exp_payer_only")
-with col_x2:
-    st.checkbox("🟣 결제자는 부담 안 함(다른 사람이 전액 부담)", key="exp_payer_not_owed")
+    beneficiary = ""
+    if payer_not_owed:
+        candidates = [p for p in st.session_state.participants if p != payer]
+        if candidates:
+            beneficiary = st.selectbox("전액 부담자(대신 내는 사람) 선택", candidates)
+            st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
+        else:
+            st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
 
-if st.session_state.exp_payer_not_owed:
-    candidates = [p for p in st.session_state.participants if p != st.session_state.exp_payer]
-    if candidates:
-        st.selectbox("전액 부담자(대신 내는 사람) 선택", candidates, key="exp_beneficiary")
-        st.markdown('<div class="hint">정산 분배 대상: 전액 부담자 1명 (결제자에게 그대로 송금되도록 계산됩니다)</div>', unsafe_allow_html=True)
-    else:
-        st.warning("결제자 외에 다른 참여자가 없습니다. 대신 부담자를 선택할 수 없어요.")
+    submitted = st.form_submit_button("저장")
 
-if st.session_state.exp_payer_only and st.session_state.exp_payer_not_owed:
-    st.warning("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
+    if submitted:
+        # 충돌 방지
+        if payer_only and payer_not_owed:
+            st.error("전액부담 옵션 2개는 동시에 선택할 수 없어요. 하나만 선택해 주세요.")
+            st.stop()
 
-st.button("저장", on_click=on_save_button)
+        if not ps_display:
+            st.error("참여자를 최소 1명 이상 선택하세요.")
+            st.stop()
 
-if st.session_state._last_error:
-    st.error(st.session_state._last_error)
-    st.session_state._last_error = ""
+        if payer_not_owed and not beneficiary:
+            st.error("대신 부담자를 선택해 주세요.")
+            st.stop()
+
+        try:
+            amt = parse_amount_text(amount_str)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
+
+        amount_krw = int(round(float(amt) * rates[currency]))
+
+        st.session_state.expenses.append({
+            "date": str(e_date),
+            "category": category,
+            "payer": payer,
+            "currency": currency,
+            "amount": float(amt),
+            "amount_krw": amount_krw,
+            "participants": ps_display,      # 표시용
+            "payer_only": bool(payer_only),  # 계산용
+            "beneficiary": beneficiary,      # 계산용
+            "memo": memo,
+            "created_at": datetime.now().isoformat()
+        })
+
+        queue_toast("지출이 추가되었습니다 ✅")
+        st.rerun()
 
 # -------------------------------
-# 지출 내역 테이블 + 삭제 + 총액
+# 지출 내역 표
 # -------------------------------
 st.subheader("📋 지출 내역")
 
