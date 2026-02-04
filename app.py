@@ -72,7 +72,8 @@ st.markdown(
         text-align: right;
         font-weight: 700;
         font-size: 1.4rem;
-        margin-top: 0.3rem;
+        margin-top: 0.35rem;
+        margin-right: 1.5rem;
         color: rgb(130, 30, 80);
       }}
       .right-total small {{
