@@ -27,6 +27,7 @@ st.set_page_config(page_title="여행 공동경비 정산", layout="wide")
 # 스타일
 # -------------------------------
 TONED_ORANGE = "#C97A2B"
+TONED_PURPLE = "#821E50"
 st.markdown(
     f"""
     <style>
@@ -74,7 +75,7 @@ st.markdown(
         font-size: 1.4rem;
          margin-top: 0.5rem;
     #    margin-right: 3rem;
-        color: rgb(130, 30, 80);
+        color: {TONED_PURPLE};
       }}
       .right-total small {{
         font-weight: 700;
@@ -84,6 +85,13 @@ st.markdown(
       display: flex;
       align-items: center;   /* 🔥 세로 중앙 정렬의 핵심 */
       height: 100%;
+      }}
+      .stat-total {{
+      text-align:right; 
+      font-weight:600; 
+      font-size:1.2rem; 
+      margin-top:1px; 
+      color: {TONED_PURPLE};
       }}
     </style>
     """,
@@ -668,7 +676,7 @@ if st.session_state.expenses:
 
         st.markdown(
             f"""
-            <div style="text-align:right; font-weight:600; font-size:1.2rem; margin-top:1px; color: rgb(130, 30, 80)">
+            <div class="stat-total">
             합계: {total_all:,} 원
             </div>
             """,
