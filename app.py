@@ -9,6 +9,7 @@ import re
 import zipfile
 import uuid
 
+st.write("### 🔥 NEW VERSION CHECK 🔥")
 # ===============================
 # 페이지 설정
 # ===============================
