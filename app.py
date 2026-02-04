@@ -394,9 +394,9 @@ if not st.session_state.participants:
     st.markdown(
         """
         <div style="padding:0.5rem 0.75rem; background:#EAF2FB; border-radius:8px;">
-        1. 왼쪽 상단 >> 사이드바를 클릭하고<br>
-        2-1. 새로운 여행을 만들기 위해서 참여자를 먼저 추가하세요.<br>
-        2-2. 또는, 기존 여행 파일을 불러 오세요.
+        1. 왼쪽 상단 >> 사이드바를 클릭하여 설정을 여세요.<br>
+        2-1. 새로운 여행을 만들기 위해서, 참여자를 먼저 추가하세요.<br>
+        2-2. 또는, 저장해 놓은 기존 여행 파일을 불러 오세요.
         </div>
         """,
         unsafe_allow_html=True
