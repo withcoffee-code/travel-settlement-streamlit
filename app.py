@@ -105,7 +105,7 @@ def ss_setdefault(k, v):
     if k not in st.session_state:
         st.session_state[k] = v
 
-ss_setdefault("trip_name_ui", "여행_정산")
+ss_setdefault("trip_name_ui", "나의 여행")
 ss_setdefault("participants", [])
 ss_setdefault("expenses", [])
 ss_setdefault("rates", {"KRW": 1.0, "USD": 1350.0, "JPY": 9.2, "EUR": 1450.0})
