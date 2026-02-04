@@ -267,15 +267,15 @@ if not st.session_state.save_filename_touched:
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
 
-    st.markdown(
-        f"""
-        <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
-          <div style="font-size:0.9rem; font-weight:700;">💰 현재 총 지출</div>
-          <div style="font-size:1.2rem; font-weight:800;">{total_spent_krw():,} 원</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+#    st.markdown(
+#        f"""
+#        <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
+#          <div style="font-size:0.9rem; font-weight:700;">💰 현재 총 지출</div>
+#          <div style="font-size:1.2rem; font-weight:800;">{total_spent_krw():,} 원</div>
+#        </div>
+#       """,
+#        unsafe_allow_html=True
+#   )
     st.write("")
 
     st.markdown("### 💾 여행 파일")
