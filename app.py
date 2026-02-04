@@ -73,7 +73,7 @@ st.markdown(
         font-weight: 700;
         font-size: 1.4rem;
         margin-top: 0.3rem;
-        color: {TONED_PURPLE};
+        color: rgb(130, 30, 80);
       }}
       .right-total small {{
         font-weight: 700;
