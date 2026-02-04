@@ -63,6 +63,21 @@ st.markdown(
         border: 1px solid rgba(210, 82, 140, 0.25);
         color: rgba(130, 30, 80, 0.95);
       }}
+      .sidebar-title {{
+        font-size: 2.0rem;
+        font-weight: 900;
+        margin: 0.2rem 0 0.6rem 0;
+      }}
+      .right-total {{
+        text-align: right;
+        font-weight: 900;
+        font-size: 1.05rem;
+        margin-top: 0.35rem;
+      }}
+      .right-total small {{
+        font-weight: 700;
+        opacity: 0.75;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -265,18 +280,11 @@ if not st.session_state.save_filename_touched:
 # 사이드바 (설정)
 # -------------------------------
 with st.sidebar:
-    st.markdown("## ⚙️ 설정")
+    # ✅ 요청: "설정" 타이틀 2배로 크게
+    st.markdown('<div class="sidebar-title">⚙️ 설정</div>', unsafe_allow_html=True)
 
-#    st.markdown(
-#        f"""
-#        <div style="padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.04);">
-#          <div style="font-size:0.9rem; font-weight:700;">💰 현재 총 지출</div>
-#          <div style="font-size:1.2rem; font-weight:800;">{total_spent_krw():,} 원</div>
-#        </div>
-#       """,
-#        unsafe_allow_html=True
-#   )
-    st.write("")
+    # ✅ 요청: 총지출 박스 제거 (기능 영향 없음)
+    # (삭제됨)
 
     st.markdown("### 💾 여행 파일")
     uploaded = st.file_uploader("여행 파일 불러오기 (JSON)", type=["json"], key="trip_uploader_sidebar")
@@ -379,7 +387,13 @@ categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", 
 # -------------------------------
 # 지출 내역 표 (결제자/참여자 컬럼 분리)
 # -------------------------------
-st.subheader("📋 지출 내역")
+# ✅ 요청: 타이틀 오른쪽 옆에 총지출 표시 (표 아래 표시는 제거)
+total_inline = total_spent_krw()
+h1, h2 = st.columns([3, 2])
+with h1:
+    st.subheader("📋 지출 내역")
+with h2:
+    st.markdown(f'<div class="right-total"><small>총지출</small> {total_inline:,} 원</div>', unsafe_allow_html=True)
 
 if st.session_state.expenses:
     expenses_sorted = sorted(
@@ -423,7 +437,7 @@ if st.session_state.expenses:
 
     selected_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("선택")]
 
-    col_a, col_b, col_c = st.columns([1, 1, 2])
+    col_a, col_b = st.columns([1, 1])
 
     with col_a:
         if st.button("✏️ 수정", use_container_width=True):
@@ -446,15 +460,6 @@ if st.session_state.expenses:
                 st.session_state.ui_nonce += 1
                 st.rerun()
 
-    with col_c:
-        st.markdown(
-            f"""
-            <div style="text-align:right; font-weight:800; font-size:1.1rem;">
-            💰 현재까지 총 지출: {total_amount:,} 원
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
 else:
     st.info("아직 입력된 지출이 없습니다.")
 
@@ -603,7 +608,6 @@ with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
 
         st.session_state.ui_nonce += 1
         st.rerun()
-
 
 # -------------------------------
 # 정산 결과 + 송금 안내
