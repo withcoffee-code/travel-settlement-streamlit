@@ -377,6 +377,88 @@ rates = st.session_state.rates
 categories = ["숙박", "식사", "카페", "교통", "쇼핑", "액티비티", "기타"]
 
 # -------------------------------
+# 지출 내역 표 (결제자/참여자 컬럼 분리)
+# -------------------------------
+st.subheader("📋 지출 내역")
+
+if st.session_state.expenses:
+    expenses_sorted = sorted(
+        st.session_state.expenses,
+        key=lambda x: (x.get("date", ""), x.get("created_at", "")),
+        reverse=True
+    )
+    id_order = [e["id"] for e in expenses_sorted]
+
+    rows = []
+    total_amount = 0
+    for e in expenses_sorted:
+        total_amount += int(e.get("amount_krw", 0))
+
+        note_parts = []
+        if e.get("beneficiary"):
+            note_parts.append(f"대신부담: {e['beneficiary']}")
+        if e.get("payer_only", False):
+            note_parts.append("전액부담")
+        note = " / ".join(note_parts)
+
+        rows.append({
+            "선택": False,
+            "날짜": e.get("date", ""),
+            "항목": e.get("category", ""),
+            "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
+            "결제자": e.get("payer", ""),
+            "참여자": ", ".join(e.get("participants", [])),
+            "비고": note,
+        })
+
+    df_table = pd.DataFrame(rows)
+
+    edited_df = st.data_editor(
+        df_table,
+        hide_index=True,
+        use_container_width=True,
+        column_config={"선택": st.column_config.CheckboxColumn("선택", default=False)},
+        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자", "비고"],
+    )
+
+    selected_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("선택")]
+
+    col_a, col_b, col_c = st.columns([1, 1, 2])
+
+    with col_a:
+        if st.button("✏️ 수정", use_container_width=True):
+            if len(selected_idx) != 1:
+                st.warning("수정할 항목을 1개만 선택해 주세요.")
+            else:
+                st.session_state.editing_id = id_order[selected_idx[0]]
+                st.session_state.ui_nonce += 1
+                st.rerun()
+
+    with col_b:
+        if st.button("🗑️ 삭제", use_container_width=True):
+            if not selected_idx:
+                st.warning("삭제할 항목을 선택해 주세요.")
+            else:
+                delete_ids = set(id_order[i] for i in selected_idx)
+                st.session_state.expenses = [e for e in st.session_state.expenses if e.get("id") not in delete_ids]
+                if st.session_state.editing_id in delete_ids:
+                    st.session_state.editing_id = None
+                st.session_state.ui_nonce += 1
+                st.rerun()
+
+    with col_c:
+        st.markdown(
+            f"""
+            <div style="text-align:right; font-weight:800; font-size:1.1rem;">
+            💰 현재까지 총 지출: {total_amount:,} 원
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+else:
+    st.info("아직 입력된 지출이 없습니다.")
+
+# -------------------------------
 # 지출 입력 / 수정
 # -------------------------------
 st.subheader("🧾 지출 입력")
@@ -522,87 +604,6 @@ with st.form(f"expense_form_{ui_nonce}", clear_on_submit=False):
         st.session_state.ui_nonce += 1
         st.rerun()
 
-# -------------------------------
-# 지출 내역 표 (결제자/참여자 컬럼 분리)
-# -------------------------------
-st.subheader("📋 지출 내역")
-
-if st.session_state.expenses:
-    expenses_sorted = sorted(
-        st.session_state.expenses,
-        key=lambda x: (x.get("date", ""), x.get("created_at", "")),
-        reverse=True
-    )
-    id_order = [e["id"] for e in expenses_sorted]
-
-    rows = []
-    total_amount = 0
-    for e in expenses_sorted:
-        total_amount += int(e.get("amount_krw", 0))
-
-        note_parts = []
-        if e.get("beneficiary"):
-            note_parts.append(f"대신부담: {e['beneficiary']}")
-        if e.get("payer_only", False):
-            note_parts.append("전액부담")
-        note = " / ".join(note_parts)
-
-        rows.append({
-            "선택": False,
-            "날짜": e.get("date", ""),
-            "항목": e.get("category", ""),
-            "금액(원)": f"{int(e.get('amount_krw', 0)):,}",
-            "결제자": e.get("payer", ""),
-            "참여자": ", ".join(e.get("participants", [])),
-            "비고": note,
-        })
-
-    df_table = pd.DataFrame(rows)
-
-    edited_df = st.data_editor(
-        df_table,
-        hide_index=True,
-        use_container_width=True,
-        column_config={"선택": st.column_config.CheckboxColumn("선택", default=False)},
-        disabled=["날짜", "항목", "금액(원)", "결제자", "참여자", "비고"],
-    )
-
-    selected_idx = [i for i, r in enumerate(edited_df.to_dict("records")) if r.get("선택")]
-
-    col_a, col_b, col_c = st.columns([1, 1, 2])
-
-    with col_a:
-        if st.button("✏️ 수정", use_container_width=True):
-            if len(selected_idx) != 1:
-                st.warning("수정할 항목을 1개만 선택해 주세요.")
-            else:
-                st.session_state.editing_id = id_order[selected_idx[0]]
-                st.session_state.ui_nonce += 1
-                st.rerun()
-
-    with col_b:
-        if st.button("🗑️ 삭제", use_container_width=True):
-            if not selected_idx:
-                st.warning("삭제할 항목을 선택해 주세요.")
-            else:
-                delete_ids = set(id_order[i] for i in selected_idx)
-                st.session_state.expenses = [e for e in st.session_state.expenses if e.get("id") not in delete_ids]
-                if st.session_state.editing_id in delete_ids:
-                    st.session_state.editing_id = None
-                st.session_state.ui_nonce += 1
-                st.rerun()
-
-    with col_c:
-        st.markdown(
-            f"""
-            <div style="text-align:right; font-weight:800; font-size:1.1rem;">
-            💰 현재까지 총 지출: {total_amount:,} 원
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-else:
-    st.info("아직 입력된 지출이 없습니다.")
 
 # -------------------------------
 # 정산 결과 + 송금 안내
