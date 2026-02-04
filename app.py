@@ -31,7 +31,7 @@ st.markdown(
     f"""
     <style>
       .main-title {{
-        font-size: 26px;
+        font-size: 30px;
         font-weight: 800;
         margin-bottom: 0.25em;
         color: {TONED_ORANGE};
