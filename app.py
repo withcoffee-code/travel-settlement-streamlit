@@ -330,7 +330,7 @@ with st.sidebar:
 
     confirm_overwrite = True
     if same_as_last:
-        confirm_overwrite = st.checkbox("⚠️ 같은 이름으로 다시 저장합니다(덮어쓰기). 계속할까요?", value=False)
+        confirm_overwrite = st.checkbox("⚠️ 같은 이름으로 다시 저장합니다. 계속할까요?", value=False)
 
     can_download = (not same_as_last) or confirm_overwrite
 
@@ -391,7 +391,7 @@ st.subheader("🧳 여행 이름")
 st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
 if not st.session_state.participants:
-    st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요.")
+    st.info(" 왼쪽 상단 >> 사이드바를 클릭하고 \n 새로운 여행을 만들기 위해서 참여자를 먼저 추가하세요. \n 또는, 기존 여행 파일을 불러 오세요.")
     st.stop()
 
 ensure_expense_ids()
