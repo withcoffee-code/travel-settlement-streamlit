@@ -396,7 +396,7 @@ if not st.session_state.participants:
         <div style="padding:0.5rem 0.75rem; background:#EAF2FB; border-radius:8px;">
         1. 왼쪽 상단 >>를 클릭하여 사이드바의 설정 화면을 여세요.<br>
         2-1. 새로운 여행을 만들기 위해서, 참여자를 먼저 추가하세요.<br>
-        2-2. 또는, 저장해 놓은 기존 여행 파일을 불러 오세요.<br>
+        2-2. 또는, 저장해 놓은 기존 여행 파일을 불러 오세요.<br><br>
         <span style="color:#821E50; font-weight:500;">
         * 지출내역을 기록한 후, 설정에서 꼭 파일로 저장해 두세요.
        </span>
