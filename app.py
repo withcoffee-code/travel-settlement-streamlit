@@ -668,7 +668,7 @@ if st.session_state.expenses:
 
         st.markdown(
             f"""
-            <div style="text-align:right; font-weight:600; font-size:1.2rem; margin-top:1px; margin-right : 10px">
+            <div style="text-align:right; font-weight:600; font-size:1.2rem; margin-top:1px; color: rgb(130, 30, 80)">
             합계: {total_all:,} 원
             </div>
             """,
