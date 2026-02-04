@@ -80,6 +80,11 @@ st.markdown(
         font-weight: 700;
         opacity: 0.75;
       }}
+      .header-row {{
+      display: flex;
+      align-items: center;   /* 🔥 세로 중앙 정렬의 핵심 */
+      height: 100%;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -394,9 +399,19 @@ total_inline = total_spent_krw()
 h1, h2 = st.columns([3, 2])
 with h1:
     st.subheader("📋 지출 내역")
+# with h2:
+#    st.markdown(f'<div class="right-total"><small>총지출</small> {total_inline:,} 원</div>', unsafe_allow_html=True)
 with h2:
-    st.markdown(f'<div class="right-total"><small>총지출</small> {total_inline:,} 원</div>', unsafe_allow_html=True)
-
+    st.markdown(
+        f"""
+        <div class="header-row">
+          <div class="right-total">
+            <small>총지출</small> {total_inline:,} 원
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 if st.session_state.expenses:
     expenses_sorted = sorted(
         st.session_state.expenses,
