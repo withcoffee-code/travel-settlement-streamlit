@@ -65,7 +65,7 @@ st.markdown(
       }}
       .sidebar-title {{
         font-size: 2.0rem;
-        font-weight: 900;
+        font-weight: 500;
         margin: 0.2rem 0 0.6rem 0;
       }}
       .right-total {{
