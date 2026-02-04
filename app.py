@@ -78,7 +78,7 @@ st.markdown(
      #   text-align: right;
         font-weight: 700;
         font-size: 1.4rem;
-    #     margin-top: 0.5rem;
+        margin-top: 1rem;
     #    margin-right: 3rem;
         color: {TONED_PURPLE};
       }}
@@ -677,7 +677,7 @@ if st.session_state.expenses:
         st.markdown(
             f"""
             <div class="stat-total">
-            합계: {total_all:,} 원
+            <small>합계:</small> {total_all:,} <small>원</small>
             </div>
             """,
             unsafe_allow_html=True
