@@ -69,7 +69,7 @@ st.markdown(
         margin: 0.2rem 0 0.6rem 0;
       }}
       .right-total {{
-        text-align: right;
+     #   text-align: right;
         font-weight: 700;
         font-size: 1.4rem;
         margin-top: 0.35rem;
@@ -378,7 +378,7 @@ st.subheader("🧳 여행 이름")
 st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
 if not st.session_state.participants:
-    st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요")
+    st.info("왼쪽 상단 >> 사이드 바 클릭하고 참여자를 먼저 추가하거나 기존 여행 파일을 열어 주세요.")
     st.stop()
 
 ensure_expense_ids()
