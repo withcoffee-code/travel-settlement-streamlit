@@ -70,9 +70,10 @@ st.markdown(
       }}
       .right-total {{
         text-align: right;
-        font-weight: 800;
-        font-size: 1.5rem;
-        margin-top: 0.25rem;
+        font-weight: 700;
+        font-size: 1.4rem;
+        margin-top: 0.3rem;
+        color: {TONED_PURPLE};
       }}
       .right-total small {{
         font-weight: 700;
