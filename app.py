@@ -406,7 +406,7 @@ with h2:
         f"""
         <div class="header-row">
           <div class="right-total">
-            <small>총지출</small> {total_inline:,} 원
+            <small>총지출</small> {total_inline:,} <small>원</small> 
           </div>
         </div>
         """,
