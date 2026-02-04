@@ -69,11 +69,16 @@ st.markdown(
         font-weight: 600;
         margin: 0.2rem 0 0.6rem 0;
       }}
+     .header-row {{
+      display: flex;
+      align-items: center;   /* 🔥 세로 중앙 정렬의 핵심 */
+      height: 100%;
+      }}
       .right-total {{
      #   text-align: right;
         font-weight: 700;
         font-size: 1.4rem;
-         margin-top: 0.5rem;
+    #     margin-top: 0.5rem;
     #    margin-right: 3rem;
         color: {TONED_PURPLE};
       }}
@@ -81,16 +86,11 @@ st.markdown(
         font-weight: 700;
         opacity: 0.75;
       }}
-      .header-row {{
-      display: flex;
-      align-items: center;   /* 🔥 세로 중앙 정렬의 핵심 */
-      height: 100%;
-      }}
       .stat-total {{
       text-align:right; 
       font-weight:600; 
       font-size:1.2rem; 
-      margin-top:1px; 
+#      margin-top:1px; 
       color: {TONED_PURPLE};
       }}
     </style>
