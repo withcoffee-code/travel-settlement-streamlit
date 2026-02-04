@@ -391,7 +391,7 @@ st.subheader("🧳 여행 이름")
 st.text_input("여행 이름 입력", key="trip_name_ui", label_visibility="collapsed")
 
 if not st.session_state.participants:
-    st.info(" 왼쪽 상단 >> 사이드바를 클릭하고 \n 새로운 여행을 만들기 위해서 참여자를 먼저 추가하세요. \n 또는, 기존 여행 파일을 불러 오세요.")
+    st.info(" 왼쪽 상단 >> 사이드바를 클릭하고 <br> 새로운 여행을 만들기 위해서 참여자를 먼저 추가하세요. <br> 또는, 기존 여행 파일을 불러 오세요.")
     st.stop()
 
 ensure_expense_ids()
